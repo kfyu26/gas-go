@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>家庭燃气监控中心</title>
+    <script src="/static/chart.js"></script>
+    <style>
+      body {
+        font-family: "Segoe UI", sans-serif;
+        margin: 0;
+        background: #f7f8fb;
+        color: #333;
+      }
+
+      header {
+        padding: 24px 32px;
+        background: #111827;
+        color: #fff;
+      }
+
+      header h1 {
+        margin: 0 0 8px;
+      }
+
+      .status {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 16px 32px;
+      }
+
+      .badge {
+        background: #fff;
+        padding: 8px 12px;
+        border-radius: 999px;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 16px;
+        padding: 0 32px 24px;
+      }
+
+      .card {
+        background: #fff;
+        padding: 16px;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+      }
+
+      .card p {
+        font-size: 20px;
+        color: #ff5722;
+      }
+
+      .charts {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 16px;
+        padding: 0 32px 24px;
+      }
+
+      .chart-card {
+        background: #fff;
+        padding: 16px;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+      }
+
+      /* Canvas 容器，防止图表无限增长 */
+      .chart-container {
+        position: relative;
+        width: 100%;
+        height: 300px;
+        min-height: 300px;
+        max-height: 300px;
+      }
+
+      button {
+        padding: 8px 16px;
+        border: none;
+        border-radius: 8px;
+        background: #2563eb;
+        color: #fff;
+        cursor: pointer;
+      }
+
+      button#refresh {
+        background: #10b981;
+      }
+
+      .data {
+        padding: 0 32px 24px;
+      }
+
+      .data table {
+        width: 100%;
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+        border-collapse: collapse;
+      }
+
+      .data th,
+      .data td {
+        padding: 10px 12px;
+        border-bottom: 1px solid #e5e7eb;
+        text-align: left;
+      }
+
+      footer {
+        padding: 16px 32px 32px;
+        color: #6b7280;
+      }
+
+      /* 加载状态提示 */
+      .loading-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.9);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+      }
+
+      .loading-spinner {
+        width: 50px;
+        height: 50px;
+        border: 4px solid #e5e7eb;
+        border-top-color: #2563eb;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .loading-text {
+        margin-top: 16px;
+        font-size: 16px;
+        color: #6b7280;
+      }
+
+      .error-message {
+        background: #fee2e2;
+        border: 1px solid #ef4444;
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin: 16px 32px;
+        color: #991b1b;
+        display: none;
+      }
+
+      .error-message.show {
+        display: block;
+      }
+
+      /* 移动端适配 */
+      @media (max-width: 640px) {
+        header {
+          padding: 16px;
+        }
+
+        .status {
+          padding: 12px 16px;
+          flex-wrap: wrap;
+        }
+
+        .metrics {
+          padding: 0 16px 16px;
+          grid-template-columns: repeat(2, 1fr);
+        }
+
+        .charts {
+          padding: 0 16px 16px;
+          grid-template-columns: 1fr;
+        }
+
+        .chart-container {
+          height: 250px;
+          min-height: 250px;
+          max-height: 250px;
+        }
+
+        .data {
+          padding: 0 16px 16px;
+        }
+
+        header h1 {
+          font-size: 18px;
+        }
+
+        .card p {
+          font-size: 16px;
+        }
+
+        .error-message {
+          margin: 12px 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div
+        style="
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        "
+      >
+        <div>
+          <h1>🔥 家庭燃气监控中心</h1>
+          <p>Go + MQTT + SQLite</p>
+        </div>
+        <div style="display: flex; gap: 12px">
+          <a
+            href="/"
+            style="
+              color: white;
+              text-decoration: none;
+              padding: 8px 16px;
+              background: #374151;
+              border-radius: 6px;
+            "
+            >🏠 首页</a
+          >
+          <a
+            href="/data-import"
+            style="
+              color: white;
+              text-decoration: none;
+              padding: 8px 16px;
+              background: #374151;
+              border-radius: 6px;
+            "
+            >⚙️ 参数设置</a
+          >
+        </div>
+      </div>
+    </header>
+
+    <!-- 加载状态遮罩 -->
+    <div id="loading-overlay" class="loading-overlay">
+      <div class="loading-spinner"></div>
+      <p class="loading-text">正在加载数据...</p>
+    </div>
+
+    <!-- 错误提示 -->
+    <div id="error-message" class="error-message"></div>
+
+    <section class="status">
+      <div id="mqtt-status" class="badge">MQTT: --</div>
+      <div id="last-msg" class="badge">最近消息: --</div>
+      <button id="refresh">刷新</button>
+    </section>
+
+    <section class="metrics">
+      <div class="card">
+        <h3>📅 今日用气</h3>
+        <p id="today-gas">--</p>
+      </div>
+      <div class="card">
+        <h3>🗓️ 本周用气</h3>
+        <p id="week-gas">--</p>
+      </div>
+      <div class="card">
+        <h3>🈷️ 本月用气</h3>
+        <p id="month-gas">--</p>
+      </div>
+      <div class="card">
+        <h3>📟 燃气表读数</h3>
+        <p id="meter-reading">--</p>
+      </div>
+      <div class="card">
+        <h3>🔋 剩余燃气</h3>
+        <p id="remain-gas">--</p>
+      </div>
+    </section>
+
+    <section class="charts">
+      <div class="chart-card">
+        <h3>📈 今日每小时用量</h3>
+        <div class="chart-container">
+          <canvas id="hourly-chart"></canvas>
+        </div>
+      </div>
+      <div class="chart-card">
+        <h3>📆 年度用气趋势</h3>
+        <div class="chart-container">
+          <canvas id="monthly-chart"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <section class="data">
+      <h2>📝 最新原始数据</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>累计脉冲</th>
+          </tr>
+        </thead>
+        <tbody id="recent-body"></tbody>
+      </table>
+    </section>
+
+    <footer>
+      <p>家庭燃气监控系统 - 整合版本</p>
+    </footer>
+
+    <script>
+      const API_BASE = "/api";
+      const REQUEST_TIMEOUT = 10000; // 10秒超时
+
+      const metricsMap = {
+        today_gas: "today-gas",
+        week_gas: "week-gas",
+        month_gas: "month-gas",
+        meter_reading: "meter-reading",
+        remain_gas: "remain-gas",
+      };
+
+      let hourlyChart;
+      let monthlyChart;
+
+      // 隐藏加载遮罩
+      function hideLoading() {
+        const overlay = document.getElementById("loading-overlay");
+        if (overlay) {
+          overlay.style.display = "none";
+        }
+      }
+
+      // 显示错误信息
+      function showError(message) {
+        const errorDiv = document.getElementById("error-message");
+        if (errorDiv) {
+          errorDiv.textContent = "⚠️ " + message;
+          errorDiv.classList.add("show");
+        }
+        hideLoading();
+      }
+
+      // 清除错误信息
+      function clearError() {
+        const errorDiv = document.getElementById("error-message");
+        if (errorDiv) {
+          errorDiv.classList.remove("show");
+        }
+      }
+
+      // 带超时的 fetch 请求
+      async function fetchJSON(path, options = {}) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+        try {
+          const res = await fetch(`${API_BASE}${path}`, {
+            headers: { "Content-Type": "application/json" },
+            signal: controller.signal,
+            ...options,
+          });
+          clearTimeout(timeoutId);
+
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || res.statusText);
+          }
+          return res.json();
+        } catch (err) {
+          clearTimeout(timeoutId);
+          if (err.name === "AbortError") {
+            throw new Error("请求超时，请检查网络连接");
+          }
+          throw err;
+        }
+      }
+
+      async function loadMetrics() {
+        try {
+          const metrics = await fetchJSON("/metrics");
+          if (!metrics) {
+            console.error("Metrics data is null");
+            return;
+          }
+
+          // 调试日志
+          console.log("获取到的 metrics 数据:", metrics);
+
+          Object.entries(metricsMap).forEach(([key, id]) => {
+            const el = document.getElementById(id);
+            if (el) {
+              if (metrics[key] !== undefined && metrics[key] !== null) {
+                const newValue = `${metrics[key]} m³`;
+                console.log(
+                  `更新 DOM #${id} (${key}): "${el.textContent}" -> "${newValue}"`
+                );
+                el.textContent = newValue;
+                // 立即验证更新是否成功
+                console.log(`验证更新后 #${id} 内容: "${el.textContent}"`);
+              } else {
+                console.warn(`指标 ${key} 不存在或为 null`);
+              }
+            } else {
+              console.error(`找不到 DOM 元素 #${id}`);
+            }
+          });
+
+          const status = document.getElementById("mqtt-status");
+          if (status && metrics.mqtt_status !== undefined) {
+            const oldStatus = status.textContent;
+            status.textContent = `MQTT: ${metrics.mqtt_status}`;
+            console.log(
+              `MQTT状态更新: "${oldStatus}" -> "${status.textContent}"`
+            );
+          }
+          const lastMsg = document.getElementById("last-msg");
+          if (lastMsg) {
+            const oldMsg = lastMsg.textContent;
+            lastMsg.textContent = `最近消息: ${metrics.last_msg_time || "--"}`;
+            console.log(
+              `最近消息更新: "${oldMsg}" -> "${lastMsg.textContent}"`
+            );
+          }
+
+          // 打印所有卡片元素的当前值
+          console.log("=== DOM元素当前值 ===");
+          Object.values(metricsMap).forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) {
+              console.log(`#${id}: "${el.textContent}"`);
+            }
+          });
+          console.log("=== DOM元素当前值结束 ===");
+        } catch (err) {
+          showError("加载指标数据失败: " + err.message);
+          console.error("加载指标失败:", err);
+          throw err;
+        }
+      }
+
+      async function loadHourlyChart() {
+        try {
+          const hourly = await fetchJSON("/hourly");
+          if (!hourly || !Array.isArray(hourly)) {
+            console.error("Hourly data is null or not an array");
+            return;
+          }
+
+          const labels = Array.from(
+            { length: 24 },
+            (_, i) => `${String(i).padStart(2, "0")}:00`
+          );
+
+          const ctx = document.getElementById("hourly-chart");
+          if (!ctx) {
+            console.error("Hourly chart canvas not found");
+            return;
+          }
+
+          // 销毁旧图表实例（如果存在）
+          if (hourlyChart) {
+            hourlyChart.destroy();
+          }
+
+          hourlyChart = new Chart(ctx, {
+            type: "bar",
+            data: {
+              labels,
+              datasets: [
+                {
+                  label: "脉冲数",
+                  data: hourly,
+                  backgroundColor: "#00A3E0",
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              animation: {
+                duration: 500, // 减少动画时间
+              },
+              plugins: {
+                legend: {
+                  display: false,
+                },
+              },
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  ticks: {
+                    maxTicksLimit: 6, // 限制Y轴刻度数量
+                  },
+                },
+                x: {
+                  ticks: {
+                    maxRotation: 45,
+                    minRotation: 45,
+                  },
+                },
+              },
+            },
+          });
+        } catch (err) {
+          showError("加载每小时图表失败: " + err.message);
+          console.error("加载每小时图表失败:", err);
+          throw err;
+        }
+      }
+
+      async function loadMonthlyChart() {
+        try {
+          const monthly = await fetchJSON("/monthly");
+          if (!monthly || !Array.isArray(monthly)) {
+            console.error("Monthly data is null or not an array");
+            return;
+          }
+
+          const labels = Array.from({ length: 12 }, (_, i) => `${i + 1}月`);
+
+          const ctx = document.getElementById("monthly-chart");
+          if (!ctx) {
+            console.error("Monthly chart canvas not found");
+            return;
+          }
+
+          // 销毁旧图表实例（如果存在）
+          if (monthlyChart) {
+            monthlyChart.destroy();
+          }
+
+          monthlyChart = new Chart(ctx, {
+            type: "bar",
+            data: {
+              labels,
+              datasets: [
+                {
+                  label: "脉冲数",
+                  data: monthly,
+                  backgroundColor: "#FF6B6B",
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              animation: {
+                duration: 500, // 减少动画时间
+              },
+              plugins: {
+                legend: {
+                  display: false,
+                },
+              },
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  ticks: {
+                    maxTicksLimit: 6,
+                  },
+                },
+                x: {
+                  ticks: {
+                    maxRotation: 45,
+                    minRotation: 45,
+                  },
+                },
+              },
+            },
+          });
+        } catch (err) {
+          showError("加载月度图表失败: " + err.message);
+          console.error("加载月度图表失败:", err);
+          throw err;
+        }
+      }
+
+      async function loadRecent() {
+        try {
+          const recent = await fetchJSON("/recent?limit=50");
+          if (!recent || !Array.isArray(recent)) {
+            console.error("Recent data is null or not an array");
+            return;
+          }
+
+          const tbody = document.getElementById("recent-body");
+          if (!tbody) {
+            console.error("Recent data tbody not found");
+            return;
+          }
+
+          tbody.innerHTML = "";
+          recent.forEach((row) => {
+            const tr = document.createElement("tr");
+            const timeCell = document.createElement("td");
+            const date = new Date(row.timestamp * 1000);
+            timeCell.textContent = date.toLocaleString();
+            const countCell = document.createElement("td");
+            countCell.textContent = row.count;
+            tr.appendChild(timeCell);
+            tr.appendChild(countCell);
+            tbody.appendChild(tr);
+          });
+        } catch (err) {
+          showError("加载最近数据失败: " + err.message);
+          console.error("加载最近数据失败:", err);
+          throw err;
+        }
+      }
+
+      let isFirstLoad = true;
+
+      async function refreshAll() {
+        if (isFirstLoad) {
+          clearError();
+        }
+        try {
+          await Promise.all([
+            loadMetrics(),
+            loadHourlyChart(),
+            loadMonthlyChart(),
+            loadRecent(),
+          ]);
+          hideLoading();
+          isFirstLoad = false;
+        } catch (err) {
+          // 只在首次加载时显示详细错误，自动刷新时静默失败
+          if (isFirstLoad) {
+            console.error("数据加载失败:", err);
+          }
+          hideLoading();
+        }
+      }
+
+      // 自动刷新定时器
+      let refreshTimer = null;
+
+      function startAutoRefresh() {
+        // 每 5 秒自动刷新一次数据，更快反映数据变化
+        refreshTimer = setInterval(async () => {
+          console.log("开始自动刷新:", new Date().toLocaleTimeString());
+          // 静默刷新，不显示错误提示，只更新数据
+          // 使用 Promise.allSettled 确保即使某个请求失败，其他请求仍能完成
+          const results = await Promise.allSettled([
+            loadMetrics().catch((e) => {
+              console.error("loadMetrics失败:", e);
+              return null;
+            }),
+            loadHourlyChart().catch((e) => {
+              console.error("loadHourlyChart失败:", e);
+              return null;
+            }),
+            loadMonthlyChart().catch((e) => {
+              console.error("loadMonthlyChart失败:", e);
+              return null;
+            }),
+            loadRecent().catch((e) => {
+              console.error("loadRecent失败:", e);
+              return null;
+            }),
+          ]);
+          console.log(
+            "自动刷新完成:",
+            new Date().toLocaleTimeString(),
+            "结果:",
+            results.map((r) => r.status)
+          );
+        }, 5000); // 5秒刷新间隔
+      }
+
+      function stopAutoRefresh() {
+        if (refreshTimer) {
+          clearInterval(refreshTimer);
+          refreshTimer = null;
+        }
+      }
+
+      function init() {
+        document
+          .getElementById("refresh")
+          .addEventListener("click", refreshAll);
+
+        // 等待页面完全加载后再初始化数据
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", () => {
+            refreshAll();
+            startAutoRefresh(); // 启动自动刷新
+          });
+        } else {
+          refreshAll();
+          startAutoRefresh(); // 启动自动刷新
+        }
+      }
+
+      // 检查 Chart.js 是否加载成功
+      if (typeof Chart === "undefined") {
+        showError("Chart.js 库加载失败，请刷新页面重试");
+        hideLoading();
+      } else {
+        init();
+      }
+    </script>
+  </body>
+</html>

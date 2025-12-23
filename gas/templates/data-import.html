@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>燃气参数设置</title>
+    <script src="/static/chart.js"></script>
+    <style>
+      body {
+        font-family: "Segoe UI", sans-serif;
+        margin: 0;
+        background: #f7f8fb;
+        color: #333;
+        padding: 20px;
+      }
+
+      .container {
+        max-width: 900px;
+        margin: 0 auto;
+      }
+
+      header {
+        background: #111827;
+        color: #fff;
+        padding: 24px;
+        border-radius: 12px;
+        margin-bottom: 20px;
+      }
+
+      .card {
+        background: #fff;
+        padding: 24px;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+        margin-bottom: 20px;
+      }
+
+      .form-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-weight: 500;
+      }
+
+      input[type="text"],
+      input[type="number"],
+      input[type="password"],
+      input[type="date"] {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        box-sizing: border-box;
+      }
+
+      button {
+        background: #2563eb;
+        color: #fff;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+
+      button:hover {
+        background: #1d4ed8;
+      }
+
+      button.danger {
+        background: #dc2626;
+      }
+
+      button.danger:hover {
+        background: #b91c1c;
+      }
+
+      button.success {
+        background: #10b981;
+      }
+
+      button.warning {
+        background: #f59e0b;
+      }
+
+      .actions {
+        margin-top: 16px;
+        display: flex;
+        gap: 12px;
+      }
+
+      .table-container {
+        overflow-x: auto;
+        margin-top: 20px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: #fff;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      th,
+      td {
+        padding: 12px;
+        text-align: left;
+        border-bottom: 1px solid #e5e7eb;
+      }
+
+      th {
+        background: #f9fafb;
+        font-weight: 600;
+      }
+
+      .alert {
+        padding: 12px;
+        border-radius: 8px;
+        margin-bottom: 16px;
+      }
+
+      .alert.success {
+        background: #d1fae5;
+        color: #065f46;
+        border: 1px solid #a7f3d0;
+      }
+
+      .alert.error {
+        background: #fee2e2;
+        color: #991b1b;
+        border: 1px solid #fca5a5;
+      }
+
+      .alert.info {
+        background: #dbeafe;
+        color: #1e40af;
+        border: 1px solid #93c5fd;
+      }
+
+      /* 移动端适配 */
+      @media (max-width: 640px) {
+        body {
+          padding: 10px;
+        }
+
+        header {
+          padding: 16px;
+        }
+
+        .card {
+          padding: 16px;
+        }
+
+        .form-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <div
+          style="
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+          "
+        >
+          <div>
+            <h1>⚙️ 燃气参数设置</h1>
+            <p>MQTT、Telegram 通知和系统参数配置</p>
+          </div>
+          <div style="display: flex; gap: 12px">
+            <a
+              href="/"
+              style="
+                color: white;
+                text-decoration: none;
+                padding: 8px 16px;
+                background: #374151;
+                border-radius: 6px;
+              "
+              >🏠 返回首页</a
+            >
+          </div>
+        </div>
+      </header>
+
+      <div id="alert-container"></div>
+
+      <!-- MQTT 配置 -->
+      <div class="card">
+        <h2>📡 MQTT 配置</h2>
+        <form id="settings-form">
+          <div class="form-grid">
+            <label>
+              每脉冲气量 (m³/pulse)
+              <input type="text" name="gas_per_pulse" />
+            </label>
+            <label>
+              MQTT Host
+              <input type="text" name="mqtt_host" />
+            </label>
+            <label>
+              MQTT Port
+              <input type="number" name="mqtt_port" />
+            </label>
+            <label>
+              MQTT 用户名
+              <input type="text" name="mqtt_user" />
+            </label>
+            <label>
+              MQTT 密码
+              <input type="password" name="mqtt_password" />
+            </label>
+            <label>
+              MQTT Topic
+              <input type="text" name="mqtt_topic" />
+            </label>
+            <label> <input type="checkbox" name="mqtt_tls" /> 启用 TLS </label>
+            <label>
+              <input type="checkbox" name="mqtt_tls_insecure" /> 跳过证书校验
+            </label>
+          </div>
+
+          <div class="actions">
+            <button type="submit">保存配置</button>
+            <button type="button" id="load-config">刷新配置</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Telegram 通知配置 -->
+      <div class="card">
+        <h2>📱 Telegram 通知</h2>
+        <form id="telegram-form">
+          <div class="form-grid">
+            <label>
+              <input type="checkbox" name="tg_enabled" /> 启用 Telegram 通知
+            </label>
+            <label>
+              Bot Token
+              <input type="password" name="tg_bot_token" />
+            </label>
+            <label>
+              Chat ID
+              <input type="text" name="tg_chat_id" />
+            </label>
+            <label>
+              API 端点
+              <input
+                type="text"
+                name="tg_api_endpoint"
+                placeholder="https://api.telegram.org"
+              />
+            </label>
+            <label>
+              预警阈值 (m³)
+              <input type="text" name="tg_threshold" />
+            </label>
+            <label>
+              通知次数
+              <input type="number" name="tg_notify_times" />
+            </label>
+            <label>
+              通知间隔 (小时)
+              <input type="text" name="tg_notify_interval_hours" />
+            </label>
+          </div>
+
+          <div class="actions">
+            <button type="submit" class="success">保存通知设置</button>
+            <button type="button" id="test-telegram" class="warning">
+              测试通知
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- 系统校准设置 -->
+      <div class="card">
+        <h2>⚙️ 系统校准设置</h2>
+        <p>校准系统参数，确保脉冲计数与燃气表读数匹配</p>
+
+        <div class="form-grid">
+          <label>
+            起始燃气量 (m³)
+            <input type="text" id="cal-initial-gas" step="0.01" />
+          </label>
+          <label>
+            燃气表底数 (m³)
+            <input type="text" id="cal-meter-base" step="0.01" />
+          </label>
+          <label>
+            目标表读数 (m³)
+            <input type="text" id="cal-desired-meter" step="0.01" />
+          </label>
+        </div>
+
+        <div class="actions">
+          <button onclick="calibrateSettings()">🔧 执行校准</button>
+          <button onclick="loadCalibrateSettings()">📥 加载当前设置</button>
+        </div>
+      </div>
+
+      <!-- 数据设置工具 -->
+      <div class="card">
+        <h2>📅 数据设置工具</h2>
+        <p>手动设置特定日期的用气量，用于测试或数据校正</p>
+
+        <div class="form-grid">
+          <label>
+            日期
+            <input type="date" id="date" max="" />
+          </label>
+          <label>
+            累计脉冲数
+            <input type="number" id="count" placeholder="例如: 12345" min="0" />
+          </label>
+          <label>
+            时间 (可选)
+            <input type="text" id="time" placeholder="例如: 14:30 (24小时制)" />
+          </label>
+        </div>
+
+        <div class="actions">
+          <button onclick="saveData()" class="success">💾 保存数据</button>
+          <button onclick="loadCurrentData()">📥 加载当前数据</button>
+          <button onclick="clearDataForm()">🔄 清空表单</button>
+        </div>
+      </div>
+
+      <!-- 快速批量设置 -->
+      <div class="card">
+        <h2>📊 快速批量设置</h2>
+        <p>批量设置连续几天的数据（每天增加固定脉冲数）</p>
+
+        <div class="form-grid">
+          <label>
+            开始日期
+            <input type="date" id="start-date" />
+          </label>
+          <label>
+            结束日期
+            <input type="date" id="end-date" />
+          </label>
+          <label>
+            每日增加脉冲数
+            <input
+              type="number"
+              id="daily-increase"
+              placeholder="例如: 100"
+              min="0"
+            />
+          </label>
+          <label>
+            起始累计数
+            <input
+              type="number"
+              id="start-count"
+              placeholder="例如: 10000"
+              min="0"
+            />
+          </label>
+        </div>
+
+        <div class="actions">
+          <button onclick="batchSetData()">📊 批量设置</button>
+        </div>
+      </div>
+
+      <!-- 查看现有数据 -->
+      <div class="card">
+        <h2>📝 现有数据</h2>
+        <button onclick="loadRecentData()">🔄 刷新数据</button>
+        <button onclick="clearAllData()" class="danger">🗑️ 清空所有数据</button>
+
+        <div class="table-container">
+          <table id="data-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>累计脉冲</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="data-tbody">
+              <tr>
+                <td colspan="3" style="text-align: center; color: #666">
+                  点击"刷新数据"加载现有数据
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const API_BASE = "/api";
+      const REQUEST_TIMEOUT = 10000; // 10秒超时
+
+      // 设置日期输入的最大值为今天
+      document.getElementById("date").max = new Date()
+        .toISOString()
+        .split("T")[0];
+      document.getElementById("start-date").max = new Date()
+        .toISOString()
+        .split("T")[0];
+      document.getElementById("end-date").max = new Date()
+        .toISOString()
+        .split("T")[0];
+
+      function showAlert(message, type = "info") {
+        const container = document.getElementById("alert-container");
+        container.innerHTML = `<div class="alert ${type}">${message}</div>`;
+        setTimeout(() => {
+          container.innerHTML = "";
+        }, 5000);
+      }
+
+      // 带超时的 fetch 请求
+      async function fetchJSON(path, options = {}) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+        try {
+          const res = await fetch(`${API_BASE}${path}`, {
+            headers: { "Content-Type": "application/json" },
+            signal: controller.signal,
+            ...options,
+          });
+          clearTimeout(timeoutId);
+
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || res.statusText);
+          }
+          return res.json();
+        } catch (err) {
+          clearTimeout(timeoutId);
+          if (err.name === "AbortError") {
+            throw new Error("请求超时，请检查网络连接");
+          }
+          throw err;
+        }
+      }
+
+      // 加载所有配置到表单
+      async function loadAllSettings() {
+        try {
+          const settings = await fetchJSON("/settings");
+
+          // MQTT 配置
+          const settingsForm = document.getElementById("settings-form");
+          Object.entries(settings).forEach(([key, value]) => {
+            const field = settingsForm.elements[key];
+            if (!field) return;
+            if (field.type === "checkbox") {
+              field.checked = Boolean(value);
+            } else {
+              field.value = value || "";
+            }
+          });
+
+          // Telegram 配置（在同一个 form 中）
+          const telegramForm = document.getElementById("telegram-form");
+          Object.entries(settings).forEach(([key, value]) => {
+            const field = telegramForm.elements[key];
+            if (!field) return;
+            if (field.type === "checkbox") {
+              field.checked = Boolean(value);
+            } else {
+              field.value = value || "";
+            }
+          });
+        } catch (err) {
+          showAlert("加载配置失败: " + err.message, "error");
+          console.error("加载配置失败:", err);
+        }
+      }
+
+      // 保存所有配置
+      async function saveAllSettings() {
+        const settingsForm = document.getElementById("settings-form");
+        const payload = {
+          gas_per_pulse: settingsForm.elements.gas_per_pulse.value,
+          mqtt_host: settingsForm.elements.mqtt_host.value,
+          mqtt_port: Number(settingsForm.elements.mqtt_port.value || 0),
+          mqtt_user: settingsForm.elements.mqtt_user.value,
+          mqtt_password: settingsForm.elements.mqtt_password.value,
+          mqtt_topic: settingsForm.elements.mqtt_topic.value,
+          mqtt_tls: settingsForm.elements.mqtt_tls.checked,
+          mqtt_tls_insecure: settingsForm.elements.mqtt_tls_insecure.checked,
+        };
+
+        try {
+          await fetchJSON("/settings", {
+            method: "PUT",
+            body: JSON.stringify(payload),
+          });
+          showAlert("MQTT 配置已保存", "success");
+        } catch (err) {
+          showAlert("保存失败: " + err.message, "error");
+          console.error("保存配置失败:", err);
+        }
+      }
+
+      // 保存 Telegram 通知设置
+      async function saveTelegramSettings() {
+        const telegramForm = document.getElementById("telegram-form");
+        const payload = {
+          tg_enabled: telegramForm.elements.tg_enabled.checked,
+          tg_bot_token: telegramForm.elements.tg_bot_token.value,
+          tg_chat_id: telegramForm.elements.tg_chat_id.value,
+          tg_api_endpoint: telegramForm.elements.tg_api_endpoint.value,
+          tg_threshold: telegramForm.elements.tg_threshold.value,
+          tg_notify_times: Number(
+            telegramForm.elements.tg_notify_times.value || 0
+          ),
+          tg_notify_interval_hours:
+            telegramForm.elements.tg_notify_interval_hours.value,
+        };
+
+        try {
+          await fetchJSON("/settings", {
+            method: "PUT",
+            body: JSON.stringify(payload),
+          });
+          showAlert("Telegram 配置已保存", "success");
+        } catch (err) {
+          showAlert("保存失败: " + err.message, "error");
+          console.error("保存配置失败:", err);
+        }
+      }
+
+      // 测试 Telegram 通知
+      async function testTelegram() {
+        try {
+          await fetchJSON("/notify/test", { method: "POST" });
+          showAlert("测试通知已发送", "success");
+        } catch (err) {
+          let errorMsg = err.message;
+          if (err.message.includes("telegram not configured")) {
+            errorMsg =
+              "Telegram 未配置。请先配置 Bot Token 和 Chat ID，并启用 Telegram 通知。";
+          } else if (err.message.includes("disabled")) {
+            errorMsg = 'Telegram 通知未启用。请先勾选"启用 Telegram 通知"。';
+          } else if (err.message.includes("401")) {
+            errorMsg = "Bot Token 无效，请检查 Token 是否正确。";
+          } else if (err.message.includes("404")) {
+            errorMsg = "Chat ID 无效，请检查 Chat ID 是否正确。";
+          } else if (err.message.includes("400")) {
+            errorMsg = "请求参数错误，请检查配置信息。";
+          } else if (err.message.includes("Failed to send")) {
+            errorMsg = "网络连接失败，请检查网络连接或 API 端点配置。";
+          }
+          showAlert("测试失败: " + errorMsg, "error");
+          console.error("测试通知失败:", err);
+        }
+      }
+
+      // 校准设置
+      async function calibrateSettings() {
+        const initialGas = document.getElementById("cal-initial-gas").value;
+        const meterBase = document.getElementById("cal-meter-base").value;
+        const desiredMeter = document.getElementById("cal-desired-meter").value;
+
+        if (!initialGas && !meterBase && !desiredMeter) {
+          showAlert("请至少填写一个校准参数", "error");
+          return;
+        }
+
+        try {
+          const payload = {};
+          if (initialGas) payload.initial_gas = initialGas;
+          if (meterBase) payload.meter_base_m3 = meterBase;
+          if (desiredMeter) payload.desired_meter_m3 = desiredMeter;
+
+          await fetchJSON("/calibrate", {
+            method: "POST",
+            body: JSON.stringify(payload),
+          });
+
+          showAlert("校准完成！设置已更新", "success");
+          clearCalibrateForm();
+        } catch (err) {
+          showAlert("校准失败: " + err.message, "error");
+        }
+      }
+
+      // 加载校准设置
+      async function loadCalibrateSettings() {
+        try {
+          const settings = await fetchJSON("/settings");
+
+          document.getElementById("cal-initial-gas").value =
+            settings.initial_gas || "";
+          document.getElementById("cal-meter-base").value =
+            settings.meter_base_m3 || "";
+          document.getElementById("cal-desired-meter").value =
+            settings.desired_meter_m3 || "";
+
+          showAlert("已加载当前设置", "success");
+        } catch (err) {
+          showAlert("加载设置失败: " + err.message, "error");
+        }
+      }
+
+      function clearCalibrateForm() {
+        document.getElementById("cal-initial-gas").value = "";
+        document.getElementById("cal-meter-base").value = "";
+        document.getElementById("cal-desired-meter").value = "";
+      }
+
+      // 数据设置相关函数
+      function getDateTime() {
+        const date = document.getElementById("date").value;
+        const time = document.getElementById("time").value;
+
+        if (!date) {
+          showAlert("请选择日期", "error");
+          return null;
+        }
+
+        let dateTime = date;
+        if (time && time.match(/^\d{1,2}:\d{2}$/)) {
+          const [hours, minutes] = time.split(":").map(Number);
+          dateTime += `T${String(hours).padStart(2, "0")}:${String(
+            minutes
+          ).padStart(2, "0")}:00`;
+        } else {
+          dateTime += "T12:00:00";
+        }
+
+        return new Date(dateTime);
+      }
+
+      async function saveData() {
+        const dateTime = getDateTime();
+        if (!dateTime) return;
+
+        const count = parseInt(document.getElementById("count").value);
+        if (isNaN(count) || count < 0) {
+          showAlert("请输入有效的累计脉冲数", "error");
+          return;
+        }
+
+        try {
+          const timestamp = Math.floor(dateTime.getTime() / 1000);
+          await fetchJSON("/debug/insert-event", {
+            method: "POST",
+            body: JSON.stringify({
+              timestamp: timestamp,
+              count: count,
+            }),
+          });
+
+          showAlert("数据保存成功", "success");
+          clearDataForm();
+          loadRecentData();
+        } catch (err) {
+          showAlert("保存失败: " + err.message, "error");
+          console.error("保存失败:", err);
+        }
+      }
+
+      function clearDataForm() {
+        document.getElementById("date").value = "";
+        document.getElementById("count").value = "";
+        document.getElementById("time").value = "";
+      }
+
+      async function loadCurrentData() {
+        try {
+          const data = await fetchJSON("/debug/events");
+          if (data.latest_event) {
+            const latest = data.latest_event;
+            const date = new Date(latest.timestamp * 1000);
+
+            document.getElementById("date").value = date
+              .toISOString()
+              .split("T")[0];
+            document.getElementById("time").value = date
+              .toTimeString()
+              .slice(0, 5);
+            document.getElementById("count").value = latest.count;
+
+            showAlert("已加载最新数据", "success");
+          } else {
+            showAlert("暂无数据", "info");
+          }
+        } catch (err) {
+          showAlert("加载数据失败: " + err.message, "error");
+        }
+      }
+
+      async function loadRecentData() {
+        try {
+          const data = await fetchJSON("/debug/events");
+          const tbody = document.getElementById("data-tbody");
+
+          if (!data.recent_events || data.recent_events.length === 0) {
+            tbody.innerHTML =
+              '<tr><td colspan="3" style="text-align: center; color: #666;">暂无数据</td></tr>';
+            return;
+          }
+
+          tbody.innerHTML = "";
+          data.recent_events.reverse().forEach((event) => {
+            const row = tbody.insertRow();
+            const date = new Date(event.timestamp * 1000);
+
+            row.innerHTML = `
+              <td>${date.toLocaleString()}</td>
+              <td>${event.count}</td>
+              <td>
+                <button onclick="deleteEvent(${event.timestamp}, ${
+              event.count
+            })" style="padding: 4px 8px; font-size: 12px;">删除</button>
+              </td>
+            `;
+          });
+        } catch (err) {
+          showAlert("加载数据失败: " + err.message, "error");
+        }
+      }
+
+      async function deleteEvent(timestamp, count) {
+        if (
+          !confirm(
+            `确定要删除这条数据吗？\n时间: ${new Date(
+              timestamp * 1000
+            ).toLocaleString()}\n脉冲数: ${count}`
+          )
+        ) {
+          return;
+        }
+
+        try {
+          await fetchJSON("/debug/delete-event", {
+            method: "POST",
+            body: JSON.stringify({ timestamp: timestamp, count: count }),
+          });
+          showAlert("删除成功", "success");
+          loadRecentData();
+        } catch (err) {
+          showAlert("删除失败: " + err.message, "error");
+        }
+      }
+
+      async function clearAllData() {
+        if (!confirm("确定要清空所有数据吗？此操作不可恢复！")) {
+          return;
+        }
+
+        try {
+          await fetchJSON("/debug/clear-events", { method: "POST" });
+          showAlert("所有数据已清空", "success");
+          loadRecentData();
+        } catch (err) {
+          showAlert("清空失败: " + err.message, "error");
+        }
+      }
+
+      async function batchSetData() {
+        const startDate = document.getElementById("start-date").value;
+        const endDate = document.getElementById("end-date").value;
+        const dailyIncrease = parseInt(
+          document.getElementById("daily-increase").value
+        );
+        const startCount = parseInt(
+          document.getElementById("start-count").value
+        );
+
+        if (!startDate || !endDate) {
+          showAlert("请选择开始和结束日期", "error");
+          return;
+        }
+
+        if (isNaN(dailyIncrease) || dailyIncrease < 0) {
+          showAlert("请输入有效的每日增加脉冲数", "error");
+          return;
+        }
+
+        if (isNaN(startCount) || startCount < 0) {
+          showAlert("请输入有效的起始累计数", "error");
+          return;
+        }
+
+        try {
+          const start = new Date(startDate);
+          const end = new Date(endDate);
+          const events = [];
+
+          for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+            events.push({
+              timestamp: Math.floor(d.getTime() / 1000),
+              count:
+                startCount +
+                dailyIncrease * Math.floor((d - start) / (1000 * 60 * 60 * 24)),
+            });
+          }
+
+          await fetchJSON("/debug/batch-insert-events", {
+            method: "POST",
+            body: JSON.stringify({ events: events }),
+          });
+
+          showAlert(`成功设置 ${events.length} 天的数据`, "success");
+          loadRecentData();
+        } catch (err) {
+          showAlert("批量设置失败: " + err.message, "error");
+        }
+      }
+
+      // 初始化事件监听
+      document.addEventListener("DOMContentLoaded", () => {
+        document
+          .getElementById("settings-form")
+          .addEventListener("submit", (e) => {
+            e.preventDefault();
+            saveAllSettings();
+          });
+
+        document
+          .getElementById("telegram-form")
+          .addEventListener("submit", (e) => {
+            e.preventDefault();
+            saveTelegramSettings();
+          });
+
+        document
+          .getElementById("test-telegram")
+          .addEventListener("click", testTelegram);
+        document
+          .getElementById("load-config")
+          .addEventListener("click", loadAllSettings);
+
+        // 页面加载时自动加载配置和数据
+        loadAllSettings();
+        loadRecentData();
+      });
+    </script>
+  </body>
+</html>
