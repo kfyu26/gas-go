@@ -247,6 +247,34 @@
             "
             >⚙️ 参数设置</a
           >
+          <a
+            href="/login"
+            id="login-btn"
+            style="
+              color: white;
+              text-decoration: none;
+              padding: 8px 16px;
+              background: #2563eb;
+              border-radius: 6px;
+              display: none;
+            "
+            >🔐 登录</a
+          >
+          <button
+            id="logout-btn"
+            style="
+              color: white;
+              text-decoration: none;
+              padding: 8px 16px;
+              background: #dc2626;
+              border: none;
+              border-radius: 6px;
+              cursor: pointer;
+              display: none;
+            "
+          >
+            退出
+          </button>
         </div>
       </div>
     </header>
@@ -324,6 +352,49 @@
     <script>
       const API_BASE = "/api";
       const REQUEST_TIMEOUT = 10000; // 10秒超时
+
+      // 检查认证状态
+      let isAuthEnabled = false;
+      let isConfigured = false;
+
+      async function checkAuthStatus() {
+        try {
+          const res = await fetch(`${API_BASE}/auth/status`);
+          if (res.ok) {
+            const data = await res.json();
+            isAuthEnabled = data.enabled;
+            isConfigured = data.configured;
+
+            const loginBtn = document.getElementById("login-btn");
+            const logoutBtn = document.getElementById("logout-btn");
+            const token = localStorage.getItem("gas_token");
+
+            if (isAuthEnabled && isConfigured) {
+              if (token) {
+                // 已登录
+                loginBtn.style.display = "none";
+                logoutBtn.style.display = "block";
+              } else {
+                // 未登录
+                loginBtn.style.display = "block";
+                logoutBtn.style.display = "none";
+              }
+            } else {
+              // 认证未启用
+              loginBtn.style.display = "none";
+              logoutBtn.style.display = "none";
+            }
+          }
+        } catch (e) {
+          console.error("检查认证状态失败:", e);
+        }
+      }
+
+      // 退出登录
+      document.getElementById("logout-btn").addEventListener("click", () => {
+        localStorage.removeItem("gas_token");
+        window.location.reload();
+      });
 
       const metricsMap = {
         today_gas: "today-gas",
@@ -691,10 +762,12 @@
         }
       }
 
-      function init() {
+      async function init() {
         document
           .getElementById("refresh")
           .addEventListener("click", refreshAll);
+
+        await checkAuthStatus();
 
         // 等待页面完全加载后再初始化数据
         if (document.readyState === "loading") {

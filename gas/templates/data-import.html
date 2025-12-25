@@ -190,6 +190,20 @@
               "
               >🏠 返回首页</a
             >
+            <button
+              id="logout-btn"
+              style="
+                color: white;
+                padding: 8px 16px;
+                background: #dc2626;
+                border: none;
+                border-radius: 6px;
+                cursor: pointer;
+                display: none;
+              "
+            >
+              退出
+            </button>
           </div>
         </div>
       </header>
@@ -427,18 +441,36 @@
         }, 5000);
       }
 
-      // 带超时的 fetch 请求
+      // 带超时的 fetch 请求（带认证）
       async function fetchJSON(path, options = {}) {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
 
+        // 获取 token
+        const token = localStorage.getItem("gas_token");
+        const headers = {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...options.headers,
+        };
+
         try {
           const res = await fetch(`${API_BASE}${path}`, {
-            headers: { "Content-Type": "application/json" },
+            headers,
             signal: controller.signal,
             ...options,
           });
           clearTimeout(timeoutId);
+
+          // 处理 401 未授权
+          if (res.status === 401) {
+            localStorage.removeItem("gas_token");
+            showAlert("登录已过期，请重新登录", "error");
+            setTimeout(() => {
+              window.location.href = "/login";
+            }, 1500);
+            throw new Error("未登录或登录已过期");
+          }
 
           if (!res.ok) {
             const data = await res.json().catch(() => ({}));
@@ -453,6 +485,21 @@
           throw err;
         }
       }
+
+      // 检查认证状态并显示退出按钮
+      async function checkAuthAndShowLogout() {
+        const token = localStorage.getItem("gas_token");
+        const logoutBtn = document.getElementById("logout-btn");
+        if (token) {
+          logoutBtn.style.display = "block";
+        }
+      }
+
+      // 退出登录
+      document.getElementById("logout-btn")?.addEventListener("click", () => {
+        localStorage.removeItem("gas_token");
+        window.location.href = "/";
+      });
 
       // 加载所有配置到表单
       async function loadAllSettings() {
@@ -846,6 +893,7 @@
           .addEventListener("click", loadAllSettings);
 
         // 页面加载时自动加载配置和数据
+        checkAuthAndShowLogout();
         loadAllSettings();
         loadRecentData();
       });

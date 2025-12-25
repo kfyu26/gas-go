@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>登录 - 家庭燃气监控中心</title>
+    <style>
+      body {
+        font-family: "Segoe UI", sans-serif;
+        margin: 0;
+        background: #f7f8fb;
+        color: #333;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .login-container {
+        background: #fff;
+        padding: 40px;
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        width: 100%;
+        max-width: 400px;
+      }
+
+      .logo {
+        text-align: center;
+        margin-bottom: 32px;
+      }
+
+      .logo h1 {
+        margin: 0 0 8px;
+        font-size: 24px;
+        color: #111827;
+      }
+
+      .logo p {
+        margin: 0;
+        color: #6b7280;
+        font-size: 14px;
+      }
+
+      .form-group {
+        margin-bottom: 20px;
+      }
+
+      .form-group label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 500;
+        color: #374151;
+      }
+
+      .form-group input {
+        width: 100%;
+        padding: 12px 16px;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        font-size: 16px;
+        box-sizing: border-box;
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+
+      .form-group input:focus {
+        outline: none;
+        border-color: #2563eb;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+      }
+
+      .btn {
+        width: 100%;
+        padding: 12px 16px;
+        border: none;
+        border-radius: 8px;
+        font-size: 16px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.2s;
+      }
+
+      .btn-primary {
+        background: #2563eb;
+        color: #fff;
+      }
+
+      .btn-primary:hover {
+        background: #1d4ed8;
+      }
+
+      .btn-primary:disabled {
+        background: #93c5fd;
+        cursor: not-allowed;
+      }
+
+      .error-message {
+        background: #fee2e2;
+        border: 1px solid #ef4444;
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin-bottom: 20px;
+        color: #991b1b;
+        display: none;
+      }
+
+      .error-message.show {
+        display: block;
+      }
+
+      .success-message {
+        background: #dcfce7;
+        border: 1px solid #22c55e;
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin-bottom: 20px;
+        color: #166534;
+        display: none;
+      }
+
+      .success-message.show {
+        display: block;
+      }
+
+      .footer {
+        margin-top: 24px;
+        text-align: center;
+        color: #6b7280;
+        font-size: 13px;
+      }
+
+      .footer a {
+        color: #2563eb;
+        text-decoration: none;
+      }
+
+      .footer a:hover {
+        text-decoration: underline;
+      }
+
+      @media (max-width: 640px) {
+        .login-container {
+          margin: 16px;
+          padding: 24px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="login-container">
+      <div class="logo">
+        <h1>🔥 家庭燃气监控中心</h1>
+        <p>请登录管理员账号</p>
+      </div>
+
+      <!-- 错误提示 -->
+      <div id="error-message" class="error-message"></div>
+
+      <!-- 成功提示 -->
+      <div id="success-message" class="success-message"></div>
+
+      <!-- 登录表单 -->
+      <form id="login-form">
+        <div class="form-group">
+          <label for="username">用户名</label>
+          <input
+            type="text"
+            id="username"
+            name="username"
+            placeholder="请输入用户名"
+            required
+            autocomplete="username"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="password">密码</label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            placeholder="请输入密码"
+            required
+            autocomplete="current-password"
+          />
+        </div>
+
+        <button type="submit" class="btn btn-primary" id="login-btn">
+          登录
+        </button>
+      </form>
+
+      <div class="footer">
+        <a href="/">返回首页</a>
+      </div>
+    </div>
+
+    <script>
+      const API_BASE = "/api";
+
+      // 显示错误信息
+      function showError(message) {
+        const errorDiv = document.getElementById("error-message");
+        errorDiv.textContent = "⚠️ " + message;
+        errorDiv.classList.add("show");
+        hideSuccess();
+      }
+
+      // 清除错误信息
+      function clearError() {
+        const errorDiv = document.getElementById("error-message");
+        errorDiv.classList.remove("show");
+      }
+
+      // 显示成功信息
+      function showSuccess(message) {
+        const successDiv = document.getElementById("success-message");
+        successDiv.textContent = "✅ " + message;
+        successDiv.classList.add("show");
+      }
+
+      // 清除成功信息
+      function hideSuccess() {
+        const successDiv = document.getElementById("success-message");
+        successDiv.classList.remove("show");
+      }
+
+      // 检查认证状态
+      async function checkAuthStatus() {
+        try {
+          const res = await fetch(`${API_BASE}/auth/status`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.authenticated) {
+              // 已登录，跳转到首页
+              window.location.href = "/data-import";
+            }
+          }
+        } catch (e) {
+          // 忽略错误
+        }
+      }
+
+      // 登录表单提交
+      document
+        .getElementById("login-form")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          clearError();
+
+          const username = document.getElementById("username").value.trim();
+          const password = document.getElementById("password").value;
+          const loginBtn = document.getElementById("login-btn");
+
+          if (!username || !password) {
+            showError("请填写用户名和密码");
+            return;
+          }
+
+          loginBtn.disabled = true;
+          loginBtn.textContent = "登录中...";
+
+          try {
+            const res = await fetch(`${API_BASE}/login`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ username, password }),
+            });
+
+            const data = await res.json();
+
+            if (!res.ok) {
+              throw new Error(data.error || "登录失败");
+            }
+
+            // 保存 Token
+            localStorage.setItem("gas_token", data.token);
+
+            showSuccess("登录成功，正在跳转...");
+
+            setTimeout(() => {
+              window.location.href = "/data-import";
+            }, 1000);
+          } catch (err) {
+            showError(err.message);
+            loginBtn.disabled = false;
+            loginBtn.textContent = "登录";
+          }
+        });
+
+      // 页面加载时检查是否已登录
+      checkAuthStatus();
+    </script>
+  </body>
+</html>

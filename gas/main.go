@@ -1,9 +1,9 @@
 package main
 
 import (
-	"html/template"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"os"
@@ -40,6 +40,8 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	// 添加 JWT 认证中间件
+	r.Use(AuthMiddleware(store))
 
 	// 静态文件服务
 	r.Get("/static/*", func(w http.ResponseWriter, r *http.Request) {
@@ -53,8 +55,30 @@ func main() {
 		}
 	})
 
-	// 数据设置工具页面
+	// 登录页面
+	r.Get("/login", func(w http.ResponseWriter, r *http.Request) {
+		loginTmpl, err := template.ParseFiles("templates/login.html")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := loginTmpl.Execute(w, nil); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
+	// 数据设置工具页面 - 需要登录
 	r.Get("/data-import", func(w http.ResponseWriter, r *http.Request) {
+		// 检查认证是否启用且管理员已配置
+		enabled, _ := isAuthEnabled(store)
+		configured, _ := isAdminConfigured(store)
+
+		if enabled && !configured {
+			// 已启用认证但未配置管理员，跳转到登录页
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+
 		dataTmpl, err := template.ParseFiles("templates/data-import.html")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -66,7 +90,107 @@ func main() {
 	})
 
 	r.Route("/api", func(r chi.Router) {
-		r.Get("/settings", func(w http.ResponseWriter, r *http.Request) {
+		// 登录 API（公开）
+		r.Post("/login", func(w http.ResponseWriter, r *http.Request) {
+			var payload struct {
+				Username string `json:"username"`
+				Password string `json:"password"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				respondError(w, http.StatusBadRequest, err)
+				return
+			}
+
+			// 检查是否已配置管理员
+			configured, err := isAdminConfigured(store)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+
+			if !configured {
+				// 首次设置管理员
+				if payload.Username == "" || payload.Password == "" {
+					respondError(w, http.StatusBadRequest, fmt.Errorf("请提供用户名和密码"))
+					return
+				}
+
+				// 检查环境变量中是否有初始密码
+				initialPassword := os.Getenv("GAS_ADMIN_PASSWORD")
+				if initialPassword == "" {
+					// 初始化管理员账号
+					if err := InitAdmin(store, payload.Username, payload.Password); err != nil {
+						respondError(w, http.StatusInternalServerError, err)
+						return
+					}
+				} else {
+					// 使用环境变量密码
+					if err := InitAdmin(store, payload.Username, initialPassword); err != nil {
+						respondError(w, http.StatusInternalServerError, err)
+						return
+					}
+				}
+
+				// 生成 Token
+				token, err := GenerateToken(store)
+				if err != nil {
+					respondError(w, http.StatusInternalServerError, err)
+					return
+				}
+
+				respondJSON(w, map[string]string{
+					"status":  "success",
+					"message": "管理员账号初始化成功",
+					"token":   token,
+				})
+				return
+			}
+
+			// 验证密码
+			valid, err := VerifyAdminPassword(store, payload.Password)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+
+			if !valid {
+				respondError(w, http.StatusUnauthorized, fmt.Errorf("密码错误"))
+				return
+			}
+
+			// 验证用户名
+			adminUsername, _ := store.GetSetting("admin_username", "admin")
+			if payload.Username != "" && payload.Username != adminUsername {
+				respondError(w, http.StatusUnauthorized, fmt.Errorf("用户名错误"))
+				return
+			}
+
+			// 生成 Token
+			token, err := GenerateToken(store)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+
+			respondJSON(w, map[string]string{
+				"status": "success",
+				"token":  token,
+			})
+		})
+
+		// 认证状态检查（公开）
+		r.Get("/auth/status", func(w http.ResponseWriter, r *http.Request) {
+			enabled, _ := isAuthEnabled(store)
+			configured, _ := isAdminConfigured(store)
+
+			respondJSON(w, map[string]interface{}{
+				"enabled":     enabled,
+				"configured":  configured,
+				"authenticated": false, // 前端通过 Token 判断
+			})
+		})
+
+		// 需要登录的设置 API
 			settings, err := loadSettings(store)
 			if err != nil {
 				respondError(w, http.StatusInternalServerError, err)
@@ -350,7 +474,9 @@ func main() {
 			})
 		})
 
-		r.Post("/notify/test", func(w http.ResponseWriter, r *http.Request) {
+		// 以下 API 需要认证（由中间件保护）
+
+		r.Get("/settings", func(w http.ResponseWriter, r *http.Request) {
 			settings, err := loadSettings(store)
 			if err != nil {
 				respondError(w, http.StatusInternalServerError, err)
@@ -384,9 +510,169 @@ func main() {
 			}
 			respondJSON(w, map[string]string{"status": "sent", "message": "测试通知已发送"})
 		})
-	})
 
-	addr := getenv("GAS_SERVER_ADDR", ":8080")
+		// 调试 API 需要认证
+		r.Post("/debug/insert-event", func(w http.ResponseWriter, r *http.Request) {
+			var payload struct {
+				Timestamp int64 `json:"timestamp"`
+				Count     int64 `json:"count"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				respondError(w, http.StatusBadRequest, err)
+				return
+			}
+			if err := store.InsertEvent(payload.Timestamp, payload.Count); err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+			respondJSON(w, map[string]string{"status": "success", "message": "数据插入成功"})
+		})
+
+		r.Post("/debug/delete-event", func(w http.ResponseWriter, r *http.Request) {
+			var payload struct {
+				Timestamp int64 `json:"timestamp"`
+				Count     int64 `json:"count"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				respondError(w, http.StatusBadRequest, err)
+				return
+			}
+			_, err := store.db.Exec(`DELETE FROM events WHERE ts = ? AND count = ?`, payload.Timestamp, payload.Count)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+			respondJSON(w, map[string]string{"status": "success", "message": "数据删除成功"})
+		})
+
+		r.Post("/debug/batch-insert-events", func(w http.ResponseWriter, r *http.Request) {
+			var payload struct {
+				Events []struct {
+					Timestamp int64 `json:"timestamp"`
+					Count     int64 `json:"count"`
+				} `json:"events"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				respondError(w, http.StatusBadRequest, err)
+				return
+			}
+			
+			tx, err := store.db.Begin()
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+			
+			for _, event := range payload.Events {
+				if _, err := tx.Exec(`INSERT INTO events(ts, count, received_ts) VALUES(?, ?, ?)`,
+					event.Timestamp, event.Count, time.Now().Unix()); err != nil {
+					tx.Rollback()
+					respondError(w, http.StatusInternalServerError, err)
+					return
+				}
+			}
+			
+			if err := tx.Commit(); err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+			
+			respondJSON(w, map[string]interface{}{
+				"status":  "success",
+				"message": "批量插入成功",
+				"count":   len(payload.Events),
+			})
+		})
+
+		r.Post("/debug/clear-events", func(w http.ResponseWriter, r *http.Request) {
+			_, err := store.db.Exec(`DELETE FROM events`)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+			respondJSON(w, map[string]string{"status": "success", "message": "所有数据已清空"})
+		})
+
+		r.Post("/calibrate", func(w http.ResponseWriter, r *http.Request) {
+			var payload struct {
+				InitialGas     string `json:"initial_gas"`
+				MeterBaseM3    string `json:"meter_base_m3"`
+				DesiredMeterM3 string `json:"desired_meter_m3"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				respondError(w, http.StatusBadRequest, err)
+				return
+			}
+
+			settings, err := loadSettings(store)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, fmt.Errorf("加载设置失败: %v", err))
+				return
+			}
+
+			totalPulses, err := calcTotalPulsesByDelta(store)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, fmt.Errorf("计算总脉冲数失败: %v", err))
+				return
+			}
+
+			if err := store.SetSetting("initial_gas_base_pulses", fmt.Sprintf("%d", totalPulses)); err != nil {
+				respondError(w, http.StatusInternalServerError, fmt.Errorf("更新基准脉冲失败: %v", err))
+				return
+			}
+			if err := store.SetSetting("calibrate_base_pulses", fmt.Sprintf("%d", totalPulses)); err != nil {
+				respondError(w, http.StatusInternalServerError, fmt.Errorf("保存校准基准脉冲失败: %v", err))
+				return
+			}
+
+			baseGasDecimal := parseDecimal(settings.InitialGas, defaultInitialGas)
+			if payload.InitialGas != "" {
+				baseGasDecimal = parseDecimal(payload.InitialGas, defaultInitialGas)
+				if err := store.SetSetting("initial_gas", payload.InitialGas); err != nil {
+					respondError(w, http.StatusInternalServerError, fmt.Errorf("更新初始燃气量失败: %v", err))
+					return
+				}
+			}
+
+			if payload.MeterBaseM3 != "" {
+				if err := store.SetSetting("meter_base_m3", payload.MeterBaseM3); err != nil {
+					respondError(w, http.StatusInternalServerError, fmt.Errorf("更新表盘基准读数失败: %v", err))
+					return
+				}
+			}
+
+			if payload.DesiredMeterM3 != "" {
+				if err := store.SetSetting("desired_meter_m3", payload.DesiredMeterM3); err != nil {
+					respondError(w, http.StatusInternalServerError, fmt.Errorf("更新目标表盘读数失败: %v", err))
+					return
+				}
+			}
+
+			if payload.DesiredMeterM3 == "" && payload.MeterBaseM3 != "" {
+				if err := store.SetSetting("desired_meter_m3", payload.MeterBaseM3); err != nil {
+					respondError(w, http.StatusInternalServerError, fmt.Errorf("同步目标读数失败: %v", err))
+					return
+				}
+			}
+
+			if err := store.SetSetting("calibrate_base_gas", baseGasDecimal.String()); err != nil {
+				respondError(w, http.StatusInternalServerError, fmt.Errorf("保存校准基准用气量失败: %v", err))
+				return
+			}
+
+			if err := store.SetSetting("calibrate_time", fmt.Sprintf("%d", time.Now().Unix())); err != nil {
+				respondError(w, http.StatusInternalServerError, fmt.Errorf("保存校准时间失败: %v", err))
+				return
+			}
+
+			respondJSON(w, map[string]string{
+				"status":  "success",
+				"message": "校准完成",
+				"info":    fmt.Sprintf("校准基准已设置：基准脉冲=%d，基准剩余气量=%s", totalPulses, baseGasDecimal.String()),
+			})
+		})
+
+		r.Post("/notify/test", func(w http.ResponseWriter, r *http.Request) {
 	log.Printf("server listening on %s", addr)
 	if err := http.ListenAndServe(addr, r); err != nil {
 		log.Fatalf("server error: %v", err)
