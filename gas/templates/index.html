@@ -471,50 +471,51 @@
             return;
           }
 
-          // 销毁旧图表实例（如果存在）
+          // 只更新数据，避免闪烁
           if (hourlyChart) {
-            hourlyChart.destroy();
+            hourlyChart.data.datasets[0].data = hourly;
+            hourlyChart.update("none"); // 无动画更新
+          } else {
+            hourlyChart = new Chart(ctx, {
+              type: "bar",
+              data: {
+                labels,
+                datasets: [
+                  {
+                    label: "脉冲数",
+                    data: hourly,
+                    backgroundColor: "#00A3E0",
+                  },
+                ],
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: {
+                  duration: 0, // 首次加载也禁用动画，避免闪烁
+                },
+                plugins: {
+                  legend: {
+                    display: false,
+                  },
+                },
+                scales: {
+                  y: {
+                    beginAtZero: true,
+                    ticks: {
+                      maxTicksLimit: 6,
+                    },
+                  },
+                  x: {
+                    ticks: {
+                      maxRotation: 45,
+                      minRotation: 45,
+                    },
+                  },
+                },
+              },
+            });
           }
-
-          hourlyChart = new Chart(ctx, {
-            type: "bar",
-            data: {
-              labels,
-              datasets: [
-                {
-                  label: "脉冲数",
-                  data: hourly,
-                  backgroundColor: "#00A3E0",
-                },
-              ],
-            },
-            options: {
-              responsive: true,
-              maintainAspectRatio: false,
-              animation: {
-                duration: 500, // 减少动画时间
-              },
-              plugins: {
-                legend: {
-                  display: false,
-                },
-              },
-              scales: {
-                y: {
-                  beginAtZero: true,
-                  ticks: {
-                    maxTicksLimit: 6, // 限制Y轴刻度数量
-                  },
-                },
-                x: {
-                  ticks: {
-                    maxRotation: 45,
-                    minRotation: 45,
-                  },
-                },
-              },
-            },
-          });
         } catch (err) {
           showError("加载每小时图表失败: " + err.message);
           console.error("加载每小时图表失败:", err);
@@ -538,50 +539,51 @@
             return;
           }
 
-          // 销毁旧图表实例（如果存在）
+          // 只更新数据，避免闪烁
           if (monthlyChart) {
-            monthlyChart.destroy();
+            monthlyChart.data.datasets[0].data = monthly;
+            monthlyChart.update("none"); // 无动画更新
+          } else {
+            monthlyChart = new Chart(ctx, {
+              type: "bar",
+              data: {
+                labels,
+                datasets: [
+                  {
+                    label: "脉冲数",
+                    data: monthly,
+                    backgroundColor: "#FF6B6B",
+                  },
+                ],
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: {
+                  duration: 0, // 首次加载也禁用动画，避免闪烁
+                },
+                plugins: {
+                  legend: {
+                    display: false,
+                  },
+                },
+                scales: {
+                  y: {
+                    beginAtZero: true,
+                    ticks: {
+                      maxTicksLimit: 6,
+                    },
+                  },
+                  x: {
+                    ticks: {
+                      maxRotation: 45,
+                      minRotation: 45,
+                    },
+                  },
+                },
+              },
+            });
           }
-
-          monthlyChart = new Chart(ctx, {
-            type: "bar",
-            data: {
-              labels,
-              datasets: [
-                {
-                  label: "脉冲数",
-                  data: monthly,
-                  backgroundColor: "#FF6B6B",
-                },
-              ],
-            },
-            options: {
-              responsive: true,
-              maintainAspectRatio: false,
-              animation: {
-                duration: 500, // 减少动画时间
-              },
-              plugins: {
-                legend: {
-                  display: false,
-                },
-              },
-              scales: {
-                y: {
-                  beginAtZero: true,
-                  ticks: {
-                    maxTicksLimit: 6,
-                  },
-                },
-                x: {
-                  ticks: {
-                    maxRotation: 45,
-                    minRotation: 45,
-                  },
-                },
-              },
-            },
-          });
         } catch (err) {
           showError("加载月度图表失败: " + err.message);
           console.error("加载月度图表失败:", err);
