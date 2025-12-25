@@ -26,6 +26,7 @@
 - 数据校准功能（支持重置基准值）
 - 调试工具（单条/批量插入数据、删除数据）
 - 数据导入页面
+- JWT 登录认证（保护配置和调试功能）
 
 ## 技术栈
 
@@ -84,7 +85,7 @@ docker-compose up -d
 ## 目录结构
 
 ```
-backend/
+gas/
 ├── main.go          # HTTP 服务入口、路由定义
 ├── db.go            # SQLite 存储层
 ├── mqtt.go          # MQTT 客户端工作协程
@@ -93,9 +94,13 @@ backend/
 ├── models.go        # 数据结构与响应模型
 ├── notify.go        # Telegram 低气量通知逻辑
 ├── tls.go           # MQTT TLS 配置
+├── auth.go          # JWT 认证中间件
 ├── templates/       # 前端静态页面
 │   ├── index.html          # 主面板
+│   ├── login.html          # 登录页面
 │   └── data-import.html    # 数据导入与校准页面
+├── static/          # 静态资源
+│   └── chart.js     # Chart.js 可视化库
 ├── go.mod
 ├── go.sum
 ├── Dockerfile
@@ -103,6 +108,43 @@ backend/
 ```
 
 ## API 接口
+
+### 登录认证
+
+```
+POST /api/login
+GET  /api/auth/status
+```
+
+**首次登录（设置管理员）：**
+
+```json
+{
+  "username": "admin",
+  "password": "your_password"
+}
+```
+
+**响应示例：**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "expires_in": 86400
+}
+```
+
+**请求头（需要认证的接口）：**
+
+```
+Authorization: Bearer <token>
+```
+
+**注意：**
+
+- 首次访问会引导设置管理员密码
+- Token 有效期为 24 小时
+- 环境变量 `GAS_ADMIN_PASSWORD` 可设置初始密码
 
 ### 基础指标
 
@@ -145,6 +187,8 @@ GET /api/monthly
 
 ### 配置管理
 
+> ⚠️ 以下接口需要登录认证
+
 ```
 GET /api/settings
 PUT /api/settings
@@ -162,19 +206,23 @@ PUT /api/settings
 | `desired_meter_m3`         | 目标燃气表读数（m³）          |
 | `mqtt_host`                | MQTT Broker 地址              |
 | `mqtt_port`                | MQTT Broker 端口              |
-| `mqtt_user`                | MQTT 用户名                   |
-| `mqtt_pass`                | MQTT 密码                     |
-| `mqtt_topic`               | MQTT 订阅主题                 |
 | `mqtt_tls`                 | 是否启用 TLS                  |
-| `tg_enabled`               | 是否启用 Telegram 通知        |
-| `tg_bot_token`             | Telegram Bot Token            |
-| `tg_chat_id`               | Telegram Chat ID              |
-| `tg_api_endpoint`          | Telegram API 端点（支持代理） |
 | `tg_threshold`             | 低气量预警阈值（m³）          |
 | `tg_notify_times`          | 通知次数限制                  |
 | `tg_notify_interval_hours` | 通知间隔（小时）              |
+| `tg_api_endpoint`          | Telegram API 端点（支持代理） |
+
+**认证相关配置（存储在数据库）：**
+
+| 参数             | 说明                       |
+| ---------------- | -------------------------- |
+| `auth_enabled`   | 是否启用认证（true/false） |
+| `admin_username` | 管理员用户名               |
+| `admin_password` | 管理员密码（bcrypt 加密）  |
 
 ### 校准功能
+
+> ⚠️ 需要登录认证
 
 ```
 POST /api/calibrate
@@ -194,6 +242,8 @@ POST /api/calibrate
 
 ### 调试接口
 
+> ⚠️ 需要登录认证
+
 ```
 POST /api/debug/insert-event          # 插入单条事件
 POST /api/debug/batch-insert-events    # 批量插入事件
@@ -204,6 +254,8 @@ GET  /api/debug/metrics               # 调试统计数据
 ```
 
 ### 通知测试
+
+> ⚠️ 需要登录认证
 
 ```
 POST /api/notify/test
