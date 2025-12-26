@@ -2,6 +2,7 @@ package main
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/shopspring/decimal"
 )
@@ -11,7 +12,7 @@ const (
 	defaultMQTTHost         = "mqtturl"
 	defaultMQTTPort         = 8883
 	defaultMQTTUser         = "user"
-	defaultMQTTPassword     = "passwrod"
+	defaultMQTTPassword     = "password"
 	defaultMQTTTopic        = "homeassistant/sensor/ir_counter/state"
 	defaultMQTTTLS          = true
 	defaultMQTTTLSInsecure  = false
@@ -75,18 +76,18 @@ func loadSettings(store *Store) (Settings, error) {
 	if err != nil {
 		return settings, err
 	}
-	settings.MQTTTLS = mqttTLS == "1"
+	settings.MQTTTLS = parseBoolSetting(mqttTLS, true)
 	mqttTLSInsecure, err := store.GetSetting("mqtt_tls_insecure", "0")
 	if err != nil {
 		return settings, err
 	}
-	settings.MQTTTLSInsecure = mqttTLSInsecure == "1"
+	settings.MQTTTLSInsecure = parseBoolSetting(mqttTLSInsecure, false)
 
 	tgEnabled, err := store.GetSetting("tg_notify_enabled", "0")
 	if err != nil {
 		return settings, err
 	}
-	settings.TGEnabled = tgEnabled == "1"
+	settings.TGEnabled = parseBoolSetting(tgEnabled, false)
 	settings.TGBotToken, err = store.GetSetting("tg_bot_token", "")
 	if err != nil {
 		return settings, err
@@ -122,6 +123,17 @@ func parseDecimal(value string, fallback string) decimal.Decimal {
 		dec, _ = decimal.NewFromString(fallback)
 	}
 	return dec
+}
+
+func parseBoolSetting(value string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func quantize3(value decimal.Decimal) decimal.Decimal {

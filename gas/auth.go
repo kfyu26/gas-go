@@ -33,10 +33,10 @@ func isAuthEnabled(store *Store) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return enabled == "true", nil
+	return parseBoolSetting(enabled, false), nil
 }
 
-// 检查是否已设置管理员密码
+// 检查是否已配置管理员密码
 func isAdminConfigured(store *Store) (bool, error) {
 	password, err := store.GetSetting("admin_password", "")
 	if err != nil {
@@ -64,14 +64,14 @@ func InitAdmin(store *Store, username, password string) error {
 	return nil
 }
 
-// 验证管理员密码
+// 校验管理员密码
 func VerifyAdminPassword(store *Store, password string) (bool, error) {
 	hashedPassword, err := store.GetSetting("admin_password", "")
 	if err != nil {
 		return false, err
 	}
 	if hashedPassword == "" {
-		return false, nil // 未配置管理员
+		return false, nil // 尚未配置管理员
 	}
 
 	err = bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
@@ -92,7 +92,7 @@ func GenerateToken(store *Store) (string, error) {
 	return token.SignedString([]byte(jwtSecretKey))
 }
 
-// 验证 JWT Token
+// 校验 JWT Token
 func ValidateToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -125,7 +125,6 @@ func generateSecureKey(length int) (string, error) {
 func AuthMiddleware(store *Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// 检查认证是否启用
 			enabled, err := isAuthEnabled(store)
 			if err != nil {
 				http.Error(w, `{"error":"认证检查失败"}`, http.StatusInternalServerError)
@@ -133,28 +132,40 @@ func AuthMiddleware(store *Store) func(http.Handler) http.Handler {
 			}
 
 			if !enabled {
-				// 未启用认证，放行
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// 检查是否是公开路由
-			publicPaths := []string{"/login", "/api/login", "/api/logout"}
-			for _, path := range publicPaths {
-				if r.URL.Path == path || strings.HasPrefix(r.URL.Path, path) {
+			publicExact := map[string]struct{}{
+				"/":                {},
+				"/login":           {},
+				"/api/login":       {},
+				"/api/auth/status": {},
+				"/api/metrics":     {},
+				"/api/hourly":      {},
+				"/api/monthly":     {},
+				"/api/recent":      {},
+				"/favicon.ico":     {},
+			}
+			publicPrefixes := []string{"/static/"}
+
+			if _, ok := publicExact[r.URL.Path]; ok {
+				next.ServeHTTP(w, r)
+				return
+			}
+			for _, prefix := range publicPrefixes {
+				if strings.HasPrefix(r.URL.Path, prefix) {
 					next.ServeHTTP(w, r)
 					return
 				}
 			}
 
-			// 从 Header 获取 Token
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
 				http.Error(w, `{"error":"未登录，请先登录"}`, http.StatusUnauthorized)
 				return
 			}
 
-			// 验证 Bearer Token
 			parts := strings.SplitN(authHeader, " ", 2)
 			if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
 				http.Error(w, `{"error":"无效的认证格式"}`, http.StatusUnauthorized)

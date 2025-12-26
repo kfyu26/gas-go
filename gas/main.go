@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -28,69 +29,42 @@ func main() {
 		return loadSettings(store)
 	})
 	worker.Start()
+	defer worker.Stop()
 
-	// 解析模板
-	tmpl, err := template.ParseFiles("templates/index.html")
-	if err != nil {
-		log.Fatalf("parse template: %v", err)
-	}
+	templateDir, staticDir := resolveAssetDirs()
+	indexTmpl := mustParseTemplate(filepath.Join(templateDir, "index.html"))
+	loginTmpl := mustParseTemplate(filepath.Join(templateDir, "login.html"))
+	dataImportTmpl := mustParseTemplate(filepath.Join(templateDir, "data-import.html"))
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	// 添加 JWT 认证中间件
 	r.Use(AuthMiddleware(store))
 
-	// 静态文件服务
-	r.Get("/static/*", func(w http.ResponseWriter, r *http.Request) {
-		http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))).ServeHTTP(w, r)
-	})
+	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
 
-	// 主页路由 - 使用模板渲染
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		if err := tmpl.Execute(w, nil); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
+		renderTemplate(w, indexTmpl, nil)
 	})
 
-	// 登录页面
 	r.Get("/login", func(w http.ResponseWriter, r *http.Request) {
-		loginTmpl, err := template.ParseFiles("templates/login.html")
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := loginTmpl.Execute(w, nil); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
+		renderTemplate(w, loginTmpl, nil)
 	})
 
-	// 数据设置工具页面 - 需要登录
 	r.Get("/data-import", func(w http.ResponseWriter, r *http.Request) {
-		// 检查认证是否启用且管理员已配置
 		enabled, _ := isAuthEnabled(store)
 		configured, _ := isAdminConfigured(store)
-
 		if enabled && !configured {
-			// 已启用认证但未配置管理员，跳转到登录页
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
 		}
-
-		dataTmpl, err := template.ParseFiles("templates/data-import.html")
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := dataTmpl.Execute(w, nil); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
+		renderTemplate(w, dataImportTmpl, nil)
 	})
 
 	r.Route("/api", func(r chi.Router) {
-		// 登录 API（公开）
+		// 登录
 		r.Post("/login", func(w http.ResponseWriter, r *http.Request) {
 			var payload struct {
 				Username string `json:"username"`
@@ -101,7 +75,6 @@ func main() {
 				return
 			}
 
-			// 检查是否已配置管理员
 			configured, err := isAdminConfigured(store)
 			if err != nil {
 				respondError(w, http.StatusInternalServerError, err)
@@ -109,29 +82,24 @@ func main() {
 			}
 
 			if !configured {
-				// 首次设置管理员
 				if payload.Username == "" || payload.Password == "" {
-					respondError(w, http.StatusBadRequest, fmt.Errorf("请提供用户名和密码"))
+					respondError(w, http.StatusBadRequest, fmt.Errorf("请输入用户名和密码"))
 					return
 				}
 
-				// 检查环境变量中是否有初始密码
 				initialPassword := os.Getenv("GAS_ADMIN_PASSWORD")
 				if initialPassword == "" {
-					// 初始化管理员账号
 					if err := InitAdmin(store, payload.Username, payload.Password); err != nil {
 						respondError(w, http.StatusInternalServerError, err)
 						return
 					}
 				} else {
-					// 使用环境变量密码
 					if err := InitAdmin(store, payload.Username, initialPassword); err != nil {
 						respondError(w, http.StatusInternalServerError, err)
 						return
 					}
 				}
 
-				// 生成 Token
 				token, err := GenerateToken(store)
 				if err != nil {
 					respondError(w, http.StatusInternalServerError, err)
@@ -146,26 +114,22 @@ func main() {
 				return
 			}
 
-			// 验证密码
 			valid, err := VerifyAdminPassword(store, payload.Password)
 			if err != nil {
 				respondError(w, http.StatusInternalServerError, err)
 				return
 			}
-
 			if !valid {
 				respondError(w, http.StatusUnauthorized, fmt.Errorf("密码错误"))
 				return
 			}
 
-			// 验证用户名
 			adminUsername, _ := store.GetSetting("admin_username", "admin")
 			if payload.Username != "" && payload.Username != adminUsername {
 				respondError(w, http.StatusUnauthorized, fmt.Errorf("用户名错误"))
 				return
 			}
 
-			// 生成 Token
 			token, err := GenerateToken(store)
 			if err != nil {
 				respondError(w, http.StatusInternalServerError, err)
@@ -178,19 +142,19 @@ func main() {
 			})
 		})
 
-		// 认证状态检查（公开）
+		// 认证状态
 		r.Get("/auth/status", func(w http.ResponseWriter, r *http.Request) {
 			enabled, _ := isAuthEnabled(store)
 			configured, _ := isAdminConfigured(store)
 
 			respondJSON(w, map[string]interface{}{
-				"enabled":     enabled,
-				"configured":  configured,
-				"authenticated": false, // 前端通过 Token 判断
+				"enabled":        enabled,
+				"configured":     configured,
+				"authenticated":  false, // 前端凭 Token 判断
 			})
 		})
 
-		// 需要登录的设置 API
+		r.Get("/settings", func(w http.ResponseWriter, r *http.Request) {
 			settings, err := loadSettings(store)
 			if err != nil {
 				respondError(w, http.StatusInternalServerError, err)
@@ -285,233 +249,24 @@ func main() {
 				respondError(w, http.StatusInternalServerError, err)
 				return
 			}
-			
+
 			now := time.Now().In(localTZ)
 			todayStart := startOfDay(now)
-			
+
 			todayPulses, _ := calcUsagePulsesByDelta(store, todayStart, now)
 			totalPulses, _ := calcTotalPulsesByDelta(store)
 			hourly, _ := calcHourlyPulsesToday(store, now)
-			
+
 			respondJSON(w, map[string]interface{}{
-				"settings": settings,
-				"now": now.Format("2006-01-02 15:04:05"),
-				"today_start": todayStart.Format("2006-01-02 15:04:05"),
+				"settings":     settings,
+				"now":          now.Format("2006-01-02 15:04:05"),
+				"today_start":  todayStart.Format("2006-01-02 15:04:05"),
 				"today_pulses": todayPulses,
 				"total_pulses": totalPulses,
-				"hourly_data": hourly,
+				"hourly_data":  hourly,
 			})
 		})
 
-		// 数据插入端点
-		r.Post("/debug/insert-event", func(w http.ResponseWriter, r *http.Request) {
-			var payload struct {
-				Timestamp int64 `json:"timestamp"`
-				Count     int64 `json:"count"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				respondError(w, http.StatusBadRequest, err)
-				return
-			}
-			if err := store.InsertEvent(payload.Timestamp, payload.Count); err != nil {
-				respondError(w, http.StatusInternalServerError, err)
-				return
-			}
-			respondJSON(w, map[string]string{"status": "success", "message": "数据插入成功"})
-		})
-
-		// 数据删除端点
-		r.Post("/debug/delete-event", func(w http.ResponseWriter, r *http.Request) {
-			var payload struct {
-				Timestamp int64 `json:"timestamp"`
-				Count     int64 `json:"count"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				respondError(w, http.StatusBadRequest, err)
-				return
-			}
-			_, err := store.db.Exec(`DELETE FROM events WHERE ts = ? AND count = ?`, payload.Timestamp, payload.Count)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, err)
-				return
-			}
-			respondJSON(w, map[string]string{"status": "success", "message": "数据删除成功"})
-		})
-
-		// 批量插入端点
-		r.Post("/debug/batch-insert-events", func(w http.ResponseWriter, r *http.Request) {
-			var payload struct {
-				Events []struct {
-					Timestamp int64 `json:"timestamp"`
-					Count     int64 `json:"count"`
-				} `json:"events"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				respondError(w, http.StatusBadRequest, err)
-				return
-			}
-			
-			tx, err := store.db.Begin()
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, err)
-				return
-			}
-			
-			for _, event := range payload.Events {
-				if _, err := tx.Exec(`INSERT INTO events(ts, count, received_ts) VALUES(?, ?, ?)`,
-					event.Timestamp, event.Count, time.Now().Unix()); err != nil {
-					tx.Rollback()
-					respondError(w, http.StatusInternalServerError, err)
-					return
-				}
-			}
-			
-			if err := tx.Commit(); err != nil {
-				respondError(w, http.StatusInternalServerError, err)
-				return
-			}
-			
-			respondJSON(w, map[string]interface{}{
-				"status": "success",
-				"message": "批量插入成功",
-				"count": len(payload.Events),
-			})
-		})
-
-		// 清空所有数据端点
-		r.Post("/debug/clear-events", func(w http.ResponseWriter, r *http.Request) {
-			_, err := store.db.Exec(`DELETE FROM events`)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, err)
-				return
-			}
-			respondJSON(w, map[string]string{"status": "success", "message": "所有数据已清空"})
-		})
-
-		// 校准功能 - 重新设置基准值
-		r.Post("/calibrate", func(w http.ResponseWriter, r *http.Request) {
-			var payload struct {
-				InitialGas     string `json:"initial_gas"`
-				MeterBaseM3    string `json:"meter_base_m3"`
-				DesiredMeterM3 string `json:"desired_meter_m3"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				respondError(w, http.StatusBadRequest, err)
-				return
-			}
-
-			settings, err := loadSettings(store)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, fmt.Errorf("加载设置失败: %v", err))
-				return
-			}
-
-			totalPulses, err := calcTotalPulsesByDelta(store)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, fmt.Errorf("计算总脉冲数失败: %v", err))
-				return
-			}
-
-			// 以当前总脉冲作为新的基准点，后续用气量都从此处开始累积
-			if err := store.SetSetting("initial_gas_base_pulses", fmt.Sprintf("%d", totalPulses)); err != nil {
-				respondError(w, http.StatusInternalServerError, fmt.Errorf("更新基准脉冲失败: %v", err))
-				return
-			}
-			// 额外记录校准时的基准脉冲，compute 时直接使用
-			if err := store.SetSetting("calibrate_base_pulses", fmt.Sprintf("%d", totalPulses)); err != nil {
-				respondError(w, http.StatusInternalServerError, fmt.Errorf("保存校准基准脉冲失败: %v", err))
-				return
-			}
-
-			// 更新基准剩余气量
-			baseGasDecimal := parseDecimal(settings.InitialGas, defaultInitialGas)
-			if payload.InitialGas != "" {
-				baseGasDecimal = parseDecimal(payload.InitialGas, defaultInitialGas)
-				if err := store.SetSetting("initial_gas", payload.InitialGas); err != nil {
-					respondError(w, http.StatusInternalServerError, fmt.Errorf("更新初始燃气量失败: %v", err))
-					return
-				}
-			}
-
-			if payload.MeterBaseM3 != "" {
-				if err := store.SetSetting("meter_base_m3", payload.MeterBaseM3); err != nil {
-					respondError(w, http.StatusInternalServerError, fmt.Errorf("更新表盘基准读数失败: %v", err))
-					return
-				}
-			}
-
-			if payload.DesiredMeterM3 != "" {
-				if err := store.SetSetting("desired_meter_m3", payload.DesiredMeterM3); err != nil {
-					respondError(w, http.StatusInternalServerError, fmt.Errorf("更新目标表盘读数失败: %v", err))
-					return
-				}
-			}
-
-			// 如果没有指定 desired_meter_m3，则使用 meter_base_m3
-			if payload.DesiredMeterM3 == "" && payload.MeterBaseM3 != "" {
-				if err := store.SetSetting("desired_meter_m3", payload.MeterBaseM3); err != nil {
-					respondError(w, http.StatusInternalServerError, fmt.Errorf("同步目标读数失败: %v", err))
-					return
-				}
-			}
-
-			// 保存校准时的基准剩余气量
-			if err := store.SetSetting("calibrate_base_gas", baseGasDecimal.String()); err != nil {
-				respondError(w, http.StatusInternalServerError, fmt.Errorf("保存校准基准用气量失败: %v", err))
-				return
-			}
-
-			// 保存校准时间
-			if err := store.SetSetting("calibrate_time", fmt.Sprintf("%d", time.Now().Unix())); err != nil {
-				respondError(w, http.StatusInternalServerError, fmt.Errorf("保存校准时间失败: %v", err))
-				return
-			}
-
-			respondJSON(w, map[string]string{
-				"status": "success",
-				"message": "校准完成",
-				"info": fmt.Sprintf("校准基准已设置：基准脉冲=%d，基准剩余气量=%s", totalPulses, baseGasDecimal.String()),
-			})
-		})
-
-		// 以下 API 需要认证（由中间件保护）
-
-		r.Get("/settings", func(w http.ResponseWriter, r *http.Request) {
-			settings, err := loadSettings(store)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, err)
-				return
-			}
-			
-			// 检查 Telegram 配置是否完整
-			if settings.TGBotToken == "" || settings.TGChatID == "" {
-				var missingFields []string
-				if settings.TGBotToken == "" {
-					missingFields = append(missingFields, "Bot Token")
-				}
-				if settings.TGChatID == "" {
-					missingFields = append(missingFields, "Chat ID")
-				}
-				
-				respondError(w, http.StatusBadRequest, fmt.Errorf("telegram not configured. Missing: %s", missingFields))
-				return
-			}
-			
-			// 检查是否启用了 Telegram 通知
-			if !settings.TGEnabled {
-				respondError(w, http.StatusBadRequest, fmt.Errorf("telegram notification is disabled. Please enable it first."))
-				return
-			}
-			
-			msg := fmt.Sprintf("🧪 <b>测试通知</b>\n\n这是一条测试消息，用于验证Telegram通知配置是否正确。\n\n⏰ 测试时间：%s", time.Now().In(localTZ).Format("2006-01-02 15:04:05"))
-			if err := sendTelegramNotification(settings.TGBotToken, settings.TGChatID, msg, settings.TGAPIEndpoint); err != nil {
-				respondError(w, http.StatusBadRequest, fmt.Errorf("failed to send telegram notification: %v", err))
-				return
-			}
-			respondJSON(w, map[string]string{"status": "sent", "message": "测试通知已发送"})
-		})
-
-		// 调试 API 需要认证
 		r.Post("/debug/insert-event", func(w http.ResponseWriter, r *http.Request) {
 			var payload struct {
 				Timestamp int64 `json:"timestamp"`
@@ -556,13 +311,13 @@ func main() {
 				respondError(w, http.StatusBadRequest, err)
 				return
 			}
-			
+
 			tx, err := store.db.Begin()
 			if err != nil {
 				respondError(w, http.StatusInternalServerError, err)
 				return
 			}
-			
+
 			for _, event := range payload.Events {
 				if _, err := tx.Exec(`INSERT INTO events(ts, count, received_ts) VALUES(?, ?, ?)`,
 					event.Timestamp, event.Count, time.Now().Unix()); err != nil {
@@ -571,12 +326,12 @@ func main() {
 					return
 				}
 			}
-			
+
 			if err := tx.Commit(); err != nil {
 				respondError(w, http.StatusInternalServerError, err)
 				return
 			}
-			
+
 			respondJSON(w, map[string]interface{}{
 				"status":  "success",
 				"message": "批量插入成功",
@@ -612,7 +367,7 @@ func main() {
 
 			totalPulses, err := calcTotalPulsesByDelta(store)
 			if err != nil {
-				respondError(w, http.StatusInternalServerError, fmt.Errorf("计算总脉冲数失败: %v", err))
+				respondError(w, http.StatusInternalServerError, fmt.Errorf("计算总脉冲失败: %v", err))
 				return
 			}
 
@@ -636,14 +391,14 @@ func main() {
 
 			if payload.MeterBaseM3 != "" {
 				if err := store.SetSetting("meter_base_m3", payload.MeterBaseM3); err != nil {
-					respondError(w, http.StatusInternalServerError, fmt.Errorf("更新表盘基准读数失败: %v", err))
+					respondError(w, http.StatusInternalServerError, fmt.Errorf("更新表底数失败: %v", err))
 					return
 				}
 			}
 
 			if payload.DesiredMeterM3 != "" {
 				if err := store.SetSetting("desired_meter_m3", payload.DesiredMeterM3); err != nil {
-					respondError(w, http.StatusInternalServerError, fmt.Errorf("更新目标表盘读数失败: %v", err))
+					respondError(w, http.StatusInternalServerError, fmt.Errorf("更新目标读数失败: %v", err))
 					return
 				}
 			}
@@ -656,7 +411,7 @@ func main() {
 			}
 
 			if err := store.SetSetting("calibrate_base_gas", baseGasDecimal.String()); err != nil {
-				respondError(w, http.StatusInternalServerError, fmt.Errorf("保存校准基准用气量失败: %v", err))
+				respondError(w, http.StatusInternalServerError, fmt.Errorf("保存校准基准燃气量失败: %v", err))
 				return
 			}
 
@@ -668,14 +423,73 @@ func main() {
 			respondJSON(w, map[string]string{
 				"status":  "success",
 				"message": "校准完成",
-				"info":    fmt.Sprintf("校准基准已设置：基准脉冲=%d，基准剩余气量=%s", totalPulses, baseGasDecimal.String()),
+				"info":    fmt.Sprintf("校准基准已设置：基准脉冲=%d，基准燃气量=%s", totalPulses, baseGasDecimal.String()),
 			})
 		})
 
 		r.Post("/notify/test", func(w http.ResponseWriter, r *http.Request) {
+			settings, err := loadSettings(store)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+
+			if settings.TGBotToken == "" || settings.TGChatID == "" {
+				var missing []string
+				if settings.TGBotToken == "" {
+					missing = append(missing, "Bot Token")
+				}
+				if settings.TGChatID == "" {
+					missing = append(missing, "Chat ID")
+				}
+				respondError(w, http.StatusBadRequest, fmt.Errorf("telegram 未配置完整，缺少: %v", missing))
+				return
+			}
+
+			if !settings.TGEnabled {
+				respondError(w, http.StatusBadRequest, fmt.Errorf("telegram 通知未开启"))
+				return
+			}
+
+			msg := fmt.Sprintf("🧪 <b>测试通知</b>\n\n这是一条测试消息，用于验证 Telegram 通知配置是否正确。\n\n⏰ 发送时间：%s",
+				time.Now().In(localTZ).Format("2006-01-02 15:04:05"))
+			if err := sendTelegramNotification(settings.TGBotToken, settings.TGChatID, msg, settings.TGAPIEndpoint); err != nil {
+				respondError(w, http.StatusBadRequest, fmt.Errorf("failed to send telegram notification: %v", err))
+				return
+			}
+			respondJSON(w, map[string]string{"status": "sent", "message": "测试通知已发送"})
+		})
+	})
+
+	addr := getenv("GAS_SERVER_ADDR", ":8080")
 	log.Printf("server listening on %s", addr)
 	if err := http.ListenAndServe(addr, r); err != nil {
 		log.Fatalf("server error: %v", err)
+	}
+}
+
+func resolveAssetDirs() (templateDir string, staticDir string) {
+	templateDir = "templates"
+	staticDir = "static"
+	// 支持从仓库根目录运行
+	if _, err := os.Stat(filepath.Join("gas", "templates", "index.html")); err == nil {
+		templateDir = filepath.Join("gas", "templates")
+		staticDir = filepath.Join("gas", "static")
+	}
+	return
+}
+
+func mustParseTemplate(path string) *template.Template {
+	tmpl, err := template.ParseFiles(path)
+	if err != nil {
+		log.Fatalf("parse template %s: %v", path, err)
+	}
+	return tmpl
+}
+
+func renderTemplate(w http.ResponseWriter, tmpl *template.Template, data any) {
+	if err := tmpl.Execute(w, data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 
@@ -729,19 +543,16 @@ func computeMetrics(store *Store) (Metrics, error) {
 		return Metrics{}, err
 	}
 
-	// 获取校准时间
 	calibrateTimeStr, _ := store.GetSetting("calibrate_time", "0")
 	calibrateTime, _ := strconv.ParseInt(calibrateTimeStr, 10, 64)
 
-	// 基准剩余气量：默认使用 initial_gas；如果已校准且存在 calibrate_base_gas，则覆盖
 	baseGas := initialGas
 	if calibrateTime > 0 {
 		if baseGasStr, err := store.GetSetting("calibrate_base_gas", baseGas.String()); err == nil {
 			baseGas = parseDecimal(baseGasStr, baseGas.String())
 		}
 	}
-	
-	// 基准脉冲：优先使用校准时记录的脉冲，没有则回退到 initial_base_pulses
+
 	basePulses := settings.InitialBasePulses
 	if calibrateTime > 0 {
 		if basePulsesStr, err := store.GetSetting("calibrate_base_pulses", fmt.Sprintf("%d", basePulses)); err == nil {
@@ -751,17 +562,13 @@ func computeMetrics(store *Store) (Metrics, error) {
 		}
 	}
 
-	// 计算从基准点开始的用气量
 	usedSinceBase := totalPulses - basePulses
 	if usedSinceBase < 0 {
 		usedSinceBase = 0
 	}
 	usedSinceBaseGas := quantize3(pulsesToGas(usedSinceBase, gasPerPulse))
-	
-	// 获取校准后的燃气表读数基准
+
 	desiredMeter := parseDecimal(settings.DesiredMeterM3, defaultMeterBase)
-	
-	// 燃气表读数与剩余气量（均基于当前基准脉冲和基准剩余气量）
 	meterReading := quantize3(desiredMeter.Add(usedSinceBaseGas))
 	remain := quantize3(baseGas.Sub(usedSinceBaseGas))
 
