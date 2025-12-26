@@ -11,6 +11,7 @@ type Settings struct {
 	InitialBasePulses    int64  `json:"initial_base_pulses"`
 	MeterBaseM3          string `json:"meter_base_m3"`
 	DesiredMeterM3       string `json:"desired_meter_m3"`
+	AuthEnabled          bool   `json:"auth_enabled"`
 	MQTTHost             string `json:"mqtt_host"`
 	MQTTPort             int    `json:"mqtt_port"`
 	MQTTUser             string `json:"mqtt_user"`

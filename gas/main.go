@@ -136,21 +136,107 @@ func main() {
 				return
 			}
 
+			http.SetCookie(w, &http.Cookie{
+				Name:     "auth_token",
+				Value:    token,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
+				Expires:  time.Now().Add(time.Hour * tokenExpiryHours),
+			})
+
 			respondJSON(w, map[string]string{
 				"status": "success",
 				"token":  token,
 			})
 		})
 
+		// 更新管理员账号/密码
+		r.Post("/admin/update", func(w http.ResponseWriter, r *http.Request) {
+			var payload struct {
+				CurrentPassword string `json:"current_password"`
+				NewUsername     string `json:"new_username"`
+				NewPassword     string `json:"new_password"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				respondError(w, http.StatusBadRequest, err)
+				return
+			}
+
+			configured, err := isAdminConfigured(store)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+			if !configured {
+				respondError(w, http.StatusBadRequest, fmt.Errorf("尚未设置管理员，请先创建管理员"))
+				return
+			}
+			if payload.CurrentPassword == "" {
+				respondError(w, http.StatusBadRequest, fmt.Errorf("请输入当前密码"))
+				return
+			}
+			if payload.NewUsername == "" {
+				respondError(w, http.StatusBadRequest, fmt.Errorf("请输入新的管理员账号"))
+				return
+			}
+			if payload.NewPassword == "" {
+				respondError(w, http.StatusBadRequest, fmt.Errorf("请输入新的管理员密码"))
+				return
+			}
+
+			valid, err := VerifyAdminPassword(store, payload.CurrentPassword)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+			if !valid {
+				respondError(w, http.StatusUnauthorized, fmt.Errorf("当前密码错误"))
+				return
+			}
+
+			if err := UpdateAdminCredentials(store, payload.NewUsername, payload.NewPassword); err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+
+			respondJSON(w, map[string]string{
+				"status":  "success",
+				"message": "管理员账号已更新，请重新登录",
+			})
+		})
+
+		// 退出登录
+		r.Post("/logout", func(w http.ResponseWriter, r *http.Request) {
+			http.SetCookie(w, &http.Cookie{
+				Name:     "auth_token",
+				Value:    "",
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
+				MaxAge:   -1,
+			})
+			respondJSON(w, map[string]string{"status": "success"})
+		})
 		// 认证状态
 		r.Get("/auth/status", func(w http.ResponseWriter, r *http.Request) {
 			enabled, _ := isAuthEnabled(store)
 			configured, _ := isAdminConfigured(store)
+			authenticated := false
+
+			if enabled && configured {
+				// 优先用 Authorization，其次用 Cookie
+				if tokenStr, err := extractToken(r); err == nil {
+					if _, err := ValidateToken(tokenStr); err == nil {
+						authenticated = true
+					}
+				}
+			}
 
 			respondJSON(w, map[string]interface{}{
-				"enabled":        enabled,
-				"configured":     configured,
-				"authenticated":  false, // 前端凭 Token 判断
+				"enabled":       enabled,
+				"configured":    configured,
+				"authenticated": authenticated,
 			})
 		})
 
@@ -611,6 +697,9 @@ func saveSettings(store *Store, payload Settings) error {
 		return err
 	}
 	if err := store.SetSetting("desired_meter_m3", payload.DesiredMeterM3); err != nil {
+		return err
+	}
+	if err := store.SetSetting("auth_enabled", boolToString(payload.AuthEnabled)); err != nil {
 		return err
 	}
 	if err := store.SetSetting("mqtt_host", payload.MQTTHost); err != nil {

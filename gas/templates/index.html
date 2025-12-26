@@ -359,7 +359,13 @@
 
       async function checkAuthStatus() {
         try {
-          const res = await fetch(`${API_BASE}/auth/status`);
+          const token = localStorage.getItem("gas_token");
+          const res = await fetch(`${API_BASE}/auth/status`, {
+            credentials: "include",
+            headers: {
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+          });
           if (res.ok) {
             const data = await res.json();
             isAuthEnabled = data.enabled;
@@ -367,10 +373,9 @@
 
             const loginBtn = document.getElementById("login-btn");
             const logoutBtn = document.getElementById("logout-btn");
-            const token = localStorage.getItem("gas_token");
 
             if (isAuthEnabled && isConfigured) {
-              if (token) {
+              if (data.authenticated) {
                 // 已登录
                 loginBtn.style.display = "none";
                 logoutBtn.style.display = "block";
@@ -393,7 +398,11 @@
       // 退出登录
       document.getElementById("logout-btn").addEventListener("click", () => {
         localStorage.removeItem("gas_token");
-        window.location.reload();
+        fetch("/api/logout", { method: "POST", credentials: "include" }).finally(
+          () => {
+            window.location.href = "/login";
+          }
+        );
       });
 
       const metricsMap = {

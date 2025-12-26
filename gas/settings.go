@@ -51,6 +51,12 @@ func loadSettings(store *Store) (Settings, error) {
 		return settings, err
 	}
 
+	authEnabled, err := store.GetSetting("auth_enabled", "0")
+	if err != nil {
+		return settings, err
+	}
+	settings.AuthEnabled = parseBoolSetting(authEnabled, false)
+
 	settings.MQTTHost, err = store.GetSetting("mqtt_host", defaultMQTTHost)
 	if err != nil {
 		return settings, err

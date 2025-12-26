@@ -210,10 +210,39 @@
 
       <div id="alert-container"></div>
 
-      <!-- MQTT 配置 -->
+      <!-- 系统与 MQTT 配置 -->
       <div class="card">
-        <h2>📡 MQTT 配置</h2>
+        <h2>🔐 系统与 MQTT 配置</h2>
         <form id="settings-form">
+          <div
+            style="
+              background: #f9fafb;
+              border: 1px solid #e5e7eb;
+              border-radius: 10px;
+              padding: 12px 14px;
+              margin-bottom: 12px;
+              display: flex;
+              flex-direction: column;
+              gap: 6px;
+            "
+          >
+            <label
+              for="auth-enabled"
+              style="
+                display: flex;
+                flex-direction: row;
+                align-items: center;
+                gap: 8px;
+                font-weight: 600;
+              "
+            >
+              <input type="checkbox" name="auth_enabled" id="auth-enabled" />
+              启用参数设置登录保护
+            </label>
+            <div id="auth-status-text" style="color: #4b5563; font-size: 14px">
+              默认关闭，可在此开启。未设置管理员时会要求先创建。
+            </div>
+          </div>
           <div class="form-grid">
             <label>
               每脉冲气量 (m³/pulse)
@@ -250,6 +279,33 @@
             <button type="button" id="load-config">刷新配置</button>
           </div>
         </form>
+      </div>
+
+      <!-- 管理员账号设置 -->
+      <div class="card">
+        <h2>👤 管理员账号设置</h2>
+        <form id="admin-form">
+          <div class="form-grid">
+            <label>
+              当前密码
+              <input type="password" name="current_password" autocomplete="current-password" />
+            </label>
+            <label>
+              新账号
+              <input type="text" name="new_username" autocomplete="username" />
+            </label>
+            <label>
+              新密码
+              <input type="password" name="new_password" autocomplete="new-password" />
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit" class="warning">更新管理员账号</button>
+          </div>
+        </form>
+        <p style="color: #6b7280; font-size: 13px; margin-top: 8px">
+          更新成功后将退出当前登录，需要使用新账号重新登录。
+        </p>
       </div>
 
       <!-- Telegram 通知配置 -->
@@ -421,6 +477,7 @@
     <script>
       const API_BASE = "/api";
       const REQUEST_TIMEOUT = 10000; // 10秒超时
+      let currentSettings = null;
 
       // 设置日期输入的最大值为今天
       document.getElementById("date").max = new Date()
@@ -457,6 +514,7 @@
         try {
           const res = await fetch(`${API_BASE}${path}`, {
             headers,
+            credentials: "include",
             signal: controller.signal,
             ...options,
           });
@@ -490,21 +548,57 @@
       async function checkAuthAndShowLogout() {
         const token = localStorage.getItem("gas_token");
         const logoutBtn = document.getElementById("logout-btn");
-        if (token) {
-          logoutBtn.style.display = "block";
+        const statusText = document.getElementById("auth-status-text");
+        try {
+          const res = await fetch(`${API_BASE}/auth/status`, {
+            credentials: "include",
+            headers: {
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+          });
+          if (!res.ok) {
+            throw new Error("认证状态获取失败");
+          }
+          const data = await res.json();
+
+          if (statusText) {
+            const parts = [];
+            parts.push(data.enabled ? "登录保护已开启" : "登录保护未开启");
+            if (!data.configured) {
+              parts.push("尚未设置管理员，请先创建");
+            }
+            if (token) {
+              parts.push(data.authenticated ? "已登录" : "需重新登录");
+            }
+            statusText.textContent = parts.join(" · ");
+          }
+
+          if (!data.configured || (data.enabled && !data.authenticated)) {
+            localStorage.removeItem("gas_token");
+            window.location.href = "/login";
+            return false;
+          }
+          logoutBtn.style.display = data.authenticated ? "block" : "none";
+          return true;
+        } catch (err) {
+          showAlert("认证检查失败: " + err.message, "error");
+          return false;
         }
       }
 
       // 退出登录
       document.getElementById("logout-btn")?.addEventListener("click", () => {
         localStorage.removeItem("gas_token");
-        window.location.href = "/";
+        fetch("/api/logout", { method: "POST", credentials: "include" }).finally(() => {
+          window.location.href = "/login";
+        });
       });
 
       // 加载所有配置到表单
       async function loadAllSettings() {
         try {
           const settings = await fetchJSON("/settings");
+          currentSettings = settings;
 
           // MQTT 配置
           const settingsForm = document.getElementById("settings-form");
@@ -517,6 +611,11 @@
               field.value = value || "";
             }
           });
+
+          // 登录保护状态
+          if (settingsForm.elements.auth_enabled) {
+            settingsForm.elements.auth_enabled.checked = Boolean(settings.auth_enabled);
+          }
 
           // Telegram 配置（在同一个 form 中）
           const telegramForm = document.getElementById("telegram-form");
@@ -535,26 +634,69 @@
         }
       }
 
+      function getFallback(key, fallback = "") {
+        if (currentSettings && key in currentSettings) {
+          return currentSettings[key];
+        }
+        return fallback;
+      }
+
+      function buildSettingsPayload() {
+        const settingsForm = document.getElementById("settings-form");
+        const telegramForm = document.getElementById("telegram-form");
+        return {
+          auth_enabled: settingsForm.elements.auth_enabled.checked,
+          gas_per_pulse:
+            settingsForm.elements.gas_per_pulse.value ||
+            getFallback("gas_per_pulse", ""),
+          mqtt_host:
+            settingsForm.elements.mqtt_host.value || getFallback("mqtt_host", ""),
+          mqtt_port: Number(
+            settingsForm.elements.mqtt_port.value ||
+              getFallback("mqtt_port", 0)
+          ),
+          mqtt_user:
+            settingsForm.elements.mqtt_user.value || getFallback("mqtt_user", ""),
+          mqtt_password:
+            settingsForm.elements.mqtt_password.value ||
+            getFallback("mqtt_password", ""),
+          mqtt_topic:
+            settingsForm.elements.mqtt_topic.value || getFallback("mqtt_topic", ""),
+          mqtt_tls:
+            settingsForm.elements.mqtt_tls.checked ||
+            Boolean(getFallback("mqtt_tls", false)),
+          mqtt_tls_insecure:
+            settingsForm.elements.mqtt_tls_insecure.checked ||
+            Boolean(getFallback("mqtt_tls_insecure", false)),
+          // 避免丢失燃气表基准/读数
+          initial_gas: getFallback("initial_gas", ""),
+          initial_base_pulses: getFallback("initial_base_pulses", 0),
+          meter_base_m3: getFallback("meter_base_m3", ""),
+          desired_meter_m3: getFallback("desired_meter_m3", ""),
+          tg_enabled: telegramForm.elements.tg_enabled.checked,
+          tg_bot_token: telegramForm.elements.tg_bot_token.value,
+          tg_chat_id: telegramForm.elements.tg_chat_id.value,
+          tg_api_endpoint: telegramForm.elements.tg_api_endpoint.value,
+          tg_threshold: telegramForm.elements.tg_threshold.value,
+          tg_notify_times: Number(telegramForm.elements.tg_notify_times.value || 0),
+          tg_notify_interval_hours:
+            telegramForm.elements.tg_notify_interval_hours.value ||
+            getFallback("tg_notify_interval_hours", ""),
+        };
+      }
+
       // 保存所有配置
       async function saveAllSettings() {
-        const settingsForm = document.getElementById("settings-form");
-        const payload = {
-          gas_per_pulse: settingsForm.elements.gas_per_pulse.value,
-          mqtt_host: settingsForm.elements.mqtt_host.value,
-          mqtt_port: Number(settingsForm.elements.mqtt_port.value || 0),
-          mqtt_user: settingsForm.elements.mqtt_user.value,
-          mqtt_password: settingsForm.elements.mqtt_password.value,
-          mqtt_topic: settingsForm.elements.mqtt_topic.value,
-          mqtt_tls: settingsForm.elements.mqtt_tls.checked,
-          mqtt_tls_insecure: settingsForm.elements.mqtt_tls_insecure.checked,
-        };
+        const payload = buildSettingsPayload();
 
         try {
           await fetchJSON("/settings", {
             method: "PUT",
             body: JSON.stringify(payload),
           });
+          currentSettings = { ...(currentSettings || {}), ...payload };
           showAlert("MQTT 配置已保存", "success");
+          checkAuthAndShowLogout();
         } catch (err) {
           showAlert("保存失败: " + err.message, "error");
           console.error("保存配置失败:", err);
@@ -563,25 +705,14 @@
 
       // 保存 Telegram 通知设置
       async function saveTelegramSettings() {
-        const telegramForm = document.getElementById("telegram-form");
-        const payload = {
-          tg_enabled: telegramForm.elements.tg_enabled.checked,
-          tg_bot_token: telegramForm.elements.tg_bot_token.value,
-          tg_chat_id: telegramForm.elements.tg_chat_id.value,
-          tg_api_endpoint: telegramForm.elements.tg_api_endpoint.value,
-          tg_threshold: telegramForm.elements.tg_threshold.value,
-          tg_notify_times: Number(
-            telegramForm.elements.tg_notify_times.value || 0
-          ),
-          tg_notify_interval_hours:
-            telegramForm.elements.tg_notify_interval_hours.value,
-        };
+        const payload = buildSettingsPayload();
 
         try {
           await fetchJSON("/settings", {
             method: "PUT",
             body: JSON.stringify(payload),
           });
+          currentSettings = { ...(currentSettings || {}), ...payload };
           showAlert("Telegram 配置已保存", "success");
         } catch (err) {
           showAlert("保存失败: " + err.message, "error");
@@ -638,6 +769,7 @@
           });
 
           showAlert("校准完成！设置已更新", "success");
+          await loadAllSettings(); // 刷新缓存，避免后续保存丢失基准
           clearCalibrateForm();
         } catch (err) {
           showAlert("校准失败: " + err.message, "error");
@@ -891,11 +1023,42 @@
         document
           .getElementById("load-config")
           .addEventListener("click", loadAllSettings);
+        document
+          .getElementById("admin-form")
+          .addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const current = form.elements.current_password.value;
+            const newUser = form.elements.new_username.value.trim();
+            const newPass = form.elements.new_password.value;
+            if (!current || !newUser || !newPass) {
+              showAlert("请填写当前密码、新账号、新密码", "error");
+              return;
+            }
+            try {
+              await fetchJSON("/admin/update", {
+                method: "POST",
+                body: JSON.stringify({
+                  current_password: current,
+                  new_username: newUser,
+                  new_password: newPass,
+                }),
+              });
+              showAlert("管理员已更新，请重新登录", "success");
+              localStorage.removeItem("gas_token");
+              setTimeout(() => (window.location.href = "/login"), 800);
+            } catch (err) {
+              showAlert("更新失败: " + err.message, "error");
+            }
+          });
 
         // 页面加载时自动加载配置和数据
-        checkAuthAndShowLogout();
-        loadAllSettings();
-        loadRecentData();
+        checkAuthAndShowLogout().then((ok) => {
+          if (ok) {
+            loadAllSettings();
+            loadRecentData();
+          }
+        });
       });
     </script>
   </body>

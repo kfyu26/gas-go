@@ -45,7 +45,7 @@ func isAdminConfigured(store *Store) (bool, error) {
 	return password != "", nil
 }
 
-// 初始化管理员账号
+// 初始化管理员账号（默认不自动开启认证，交由设置页开关控制）
 func InitAdmin(store *Store, username, password string) error {
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -58,9 +58,6 @@ func InitAdmin(store *Store, username, password string) error {
 	if err := store.SetSetting("admin_password", string(hashedPassword)); err != nil {
 		return err
 	}
-	if err := store.SetSetting("auth_enabled", "true"); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -71,11 +68,26 @@ func VerifyAdminPassword(store *Store, password string) (bool, error) {
 		return false, err
 	}
 	if hashedPassword == "" {
-		return false, nil // 尚未配置管理员
+		return false, nil
 	}
 
 	err = bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
 	return err == nil, nil
+}
+
+// 更新管理员账号和密码
+func UpdateAdminCredentials(store *Store, username, password string) error {
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	if err := store.SetSetting("admin_username", username); err != nil {
+		return err
+	}
+	if err := store.SetSetting("admin_password", string(hashedPassword)); err != nil {
+		return err
+	}
+	return nil
 }
 
 // 生成 JWT Token
@@ -112,6 +124,26 @@ func ValidateToken(tokenString string) (*Claims, error) {
 	return nil, errors.New("invalid token")
 }
 
+// 从 Authorization 或 Cookie 中获取 Token 并校验
+func extractToken(r *http.Request) (string, error) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader != "" {
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
+			return parts[1], nil
+		}
+	}
+
+	if c, err := r.Cookie("auth_token"); err == nil && c.Value != "" {
+		return c.Value, nil
+	}
+
+	if authHeader != "" {
+		return "", errors.New("invalid auth header")
+	}
+	return "", errors.New("no token")
+}
+
 // 生成安全的随机密钥
 func generateSecureKey(length int) (string, error) {
 	bytes := make([]byte, length)
@@ -126,6 +158,11 @@ func AuthMiddleware(store *Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			enabled, err := isAuthEnabled(store)
+			if err != nil {
+				http.Error(w, `{"error":"认证检查失败"}`, http.StatusInternalServerError)
+				return
+			}
+			configured, err := isAdminConfigured(store)
 			if err != nil {
 				http.Error(w, `{"error":"认证检查失败"}`, http.StatusInternalServerError)
 				return
@@ -149,6 +186,25 @@ func AuthMiddleware(store *Store) func(http.Handler) http.Handler {
 			}
 			publicPrefixes := []string{"/static/"}
 
+			if !configured {
+				if r.URL.Path == "/data-import" {
+					http.Redirect(w, r, "/login", http.StatusFound)
+					return
+				}
+				if _, ok := publicExact[r.URL.Path]; ok {
+					next.ServeHTTP(w, r)
+					return
+				}
+				for _, prefix := range publicPrefixes {
+					if strings.HasPrefix(r.URL.Path, prefix) {
+						next.ServeHTTP(w, r)
+						return
+					}
+				}
+				http.Error(w, `{"error":"尚未设置管理员，请先创建管理员"}`, http.StatusUnauthorized)
+				return
+			}
+
 			if _, ok := publicExact[r.URL.Path]; ok {
 				next.ServeHTTP(w, r)
 				return
@@ -160,20 +216,21 @@ func AuthMiddleware(store *Store) func(http.Handler) http.Handler {
 				}
 			}
 
-			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
+			tokenStr, err := extractToken(r)
+			if err != nil {
+				if r.URL.Path == "/data-import" {
+					http.Redirect(w, r, "/login", http.StatusFound)
+					return
+				}
 				http.Error(w, `{"error":"未登录，请先登录"}`, http.StatusUnauthorized)
 				return
 			}
 
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-				http.Error(w, `{"error":"无效的认证格式"}`, http.StatusUnauthorized)
-				return
-			}
-
-			_, err = ValidateToken(parts[1])
-			if err != nil {
+			if _, err := ValidateToken(tokenStr); err != nil {
+				if r.URL.Path == "/data-import" {
+					http.Redirect(w, r, "/login", http.StatusFound)
+					return
+				}
 				http.Error(w, `{"error":"Token 无效或已过期"}`, http.StatusUnauthorized)
 				return
 			}

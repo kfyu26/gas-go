@@ -159,6 +159,21 @@
       <!-- 成功提示 -->
       <div id="success-message" class="success-message"></div>
 
+      <div
+        id="login-info"
+        style="margin-bottom: 12px; color: #374151; font-size: 14px"
+      ></div>
+      <div style="margin-bottom: 12px">
+        <button
+          type="button"
+          id="clear-token"
+          class="btn"
+          style="background: #374151; color: #fff"
+        >
+          退出当前登录
+        </button>
+      </div>
+
       <!-- 登录表单 -->
       <form id="login-form">
         <div class="form-group">
@@ -227,12 +242,31 @@
 
       // 检查认证状态
       async function checkAuthStatus() {
+        const token = localStorage.getItem("gas_token");
+        const info = document.getElementById("login-info");
         try {
-          const res = await fetch(`${API_BASE}/auth/status`);
+          const res = await fetch(`${API_BASE}/auth/status`, {
+            credentials: "include",
+            headers: {
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+          });
           if (res.ok) {
             const data = await res.json();
-            if (data.authenticated) {
-              // 已登录，跳转到首页
+            const notes = [];
+            notes.push(data.enabled ? "参数设置登录保护已开启" : "登录保护当前关闭，可在设置页开启");
+            if (!data.configured) {
+              notes.push("尚未设置管理员，首次登录会创建账号");
+            }
+            if (info) {
+              info.textContent = notes.join(" · ");
+            }
+            const logoutBtn = document.getElementById("clear-token");
+            if (logoutBtn) {
+              logoutBtn.style.display = data.authenticated ? "inline-block" : "none";
+            }
+            if (data.enabled && data.configured && data.authenticated) {
+              // 已登录，跳转到设置页
               window.location.href = "/data-import";
             }
           }
@@ -240,6 +274,15 @@
           // 忽略错误
         }
       }
+
+      document.getElementById("clear-token").addEventListener("click", () => {
+        localStorage.removeItem("gas_token");
+        fetch("/api/logout", { method: "POST", credentials: "include" }).finally(() => {
+          showSuccess("已退出登录，可重新登录");
+          const logoutBtn = document.getElementById("clear-token");
+          if (logoutBtn) logoutBtn.style.display = "none";
+        });
+      });
 
       // 登录表单提交
       document
