@@ -22,6 +22,7 @@ const (
 	defaultTGThreshold      = "5.0"
 	defaultTGNotifyTimes    = 2
 	defaultTGNotifyInterval = "2.0"
+	defaultSignalMinIntervalMs = 5000
 )
 
 func loadSettings(store *Store) (Settings, error) {
@@ -88,6 +89,14 @@ func loadSettings(store *Store) (Settings, error) {
 		return settings, err
 	}
 	settings.MQTTTLSInsecure = parseBoolSetting(mqttTLSInsecure, false)
+	signalMinIntervalMs, err := store.GetSetting("signal_min_interval_ms", strconv.Itoa(defaultSignalMinIntervalMs))
+	if err != nil {
+		return settings, err
+	}
+	settings.SignalMinIntervalMs, _ = strconv.Atoi(signalMinIntervalMs)
+	if settings.SignalMinIntervalMs <= 0 {
+		settings.SignalMinIntervalMs = defaultSignalMinIntervalMs
+	}
 
 	tgEnabled, err := store.GetSetting("tg_notify_enabled", "0")
 	if err != nil {

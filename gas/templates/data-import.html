@@ -249,6 +249,13 @@
               <input type="text" name="gas_per_pulse" />
             </label>
             <label>
+              信号最短间隔（秒）
+              <input type="number" name="signal_min_interval_sec" min="0" step="1" />
+              <small style="color: #6b7280; font-size: 12px">
+                过滤短于此间隔的信号，推荐 5–10 秒；留空则使用默认值。
+              </small>
+            </label>
+            <label>
               MQTT Host
               <input type="text" name="mqtt_host" />
             </label>
@@ -477,6 +484,7 @@
     <script>
       const API_BASE = "/api";
       const REQUEST_TIMEOUT = 10000; // 10秒超时
+      const DEFAULT_SIGNAL_MIN_INTERVAL_MS = 5000;
       let currentSettings = null;
 
       // 设置日期输入的最大值为今天
@@ -611,6 +619,15 @@
               field.value = value || "";
             }
           });
+          if (settingsForm.elements.signal_min_interval_sec) {
+            let intervalMs = Number(settings.signal_min_interval_ms);
+            if (!Number.isFinite(intervalMs) || intervalMs < 0) {
+              intervalMs = DEFAULT_SIGNAL_MIN_INTERVAL_MS;
+            }
+            settingsForm.elements.signal_min_interval_sec.value = (
+              intervalMs / 1000
+            ).toString();
+          }
 
           // 登录保护状态
           if (settingsForm.elements.auth_enabled) {
@@ -644,6 +661,19 @@
       function buildSettingsPayload() {
         const settingsForm = document.getElementById("settings-form");
         const telegramForm = document.getElementById("telegram-form");
+        const intervalField = settingsForm.elements.signal_min_interval_sec;
+        const rawIntervalSec = intervalField ? intervalField.value : "";
+        const intervalSec = rawIntervalSec === "" ? null : Number(rawIntervalSec);
+        if (intervalSec !== null && (Number.isNaN(intervalSec) || intervalSec < 0)) {
+          throw new Error("信号最短间隔需为非负数字");
+        }
+        let intervalMs =
+          intervalSec === null
+            ? Number(getFallback("signal_min_interval_ms", DEFAULT_SIGNAL_MIN_INTERVAL_MS))
+            : Math.round(intervalSec * 1000);
+        if (!Number.isFinite(intervalMs) || intervalMs < 0) {
+          intervalMs = DEFAULT_SIGNAL_MIN_INTERVAL_MS;
+        }
         return {
           auth_enabled: settingsForm.elements.auth_enabled.checked,
           gas_per_pulse:
@@ -668,6 +698,7 @@
           mqtt_tls_insecure:
             settingsForm.elements.mqtt_tls_insecure.checked ||
             Boolean(getFallback("mqtt_tls_insecure", false)),
+          signal_min_interval_ms: intervalMs,
           // 避免丢失燃气表基准/读数
           initial_gas: getFallback("initial_gas", ""),
           initial_base_pulses: getFallback("initial_base_pulses", 0),
@@ -687,9 +718,8 @@
 
       // 保存所有配置
       async function saveAllSettings() {
-        const payload = buildSettingsPayload();
-
         try {
+          const payload = buildSettingsPayload();
           await fetchJSON("/settings", {
             method: "PUT",
             body: JSON.stringify(payload),
@@ -705,9 +735,8 @@
 
       // 保存 Telegram 通知设置
       async function saveTelegramSettings() {
-        const payload = buildSettingsPayload();
-
         try {
+          const payload = buildSettingsPayload();
           await fetchJSON("/settings", {
             method: "PUT",
             body: JSON.stringify(payload),
@@ -810,15 +839,38 @@
           return null;
         }
 
-        let dateTime = date;
-        if (time && time.match(/^\d{1,2}:\d{2}$/)) {
-          const [hours, minutes] = time.split(":").map(Number);
-          dateTime += `T${String(hours).padStart(2, "0")}:${String(
-            minutes
-          ).padStart(2, "0")}:00`;
-        } else {
-          dateTime += "T12:00:00";
+        let hours = 0;
+        let minutes = 0;
+        let seconds = 0;
+
+        if (time) {
+          const match = time.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+          if (!match) {
+            showAlert("时间格式需为 HH:MM 或 HH:MM:SS", "error");
+            return null;
+          }
+          hours = Number(match[1]);
+          minutes = Number(match[2]);
+          seconds = match[3] !== undefined ? Number(match[3]) : 0;
+          if (
+            !Number.isInteger(hours) ||
+            !Number.isInteger(minutes) ||
+            !Number.isInteger(seconds) ||
+            hours < 0 ||
+            hours > 23 ||
+            minutes < 0 ||
+            minutes > 59 ||
+            seconds < 0 ||
+            seconds > 59
+          ) {
+            showAlert("时间需为有效的 24 小时制", "error");
+            return null;
+          }
         }
+
+        const dateTime = `${date}T${String(hours).padStart(2, "0")}:${String(
+          minutes
+        ).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 
         return new Date(dateTime);
       }

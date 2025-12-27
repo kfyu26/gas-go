@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -15,6 +16,9 @@ type MQTTWorker struct {
 	client mqtt.Client
 	stopCh chan struct{}
 	status string
+	mu             sync.Mutex
+	lastAcceptedMs int64
+	filteredCount  int64
 }
 
 func NewMQTTWorker(store *Store, config func() (Settings, error)) *MQTTWorker {
@@ -31,6 +35,7 @@ func (w *MQTTWorker) Status() string {
 }
 
 func (w *MQTTWorker) Start() {
+	w.preloadLastAccepted()
 	go func() {
 		for {
 			select {
@@ -118,19 +123,43 @@ func (w *MQTTWorker) handleMessage(_ mqtt.Client, msg mqtt.Message) {
 		log.Printf("MQTT payload parse error: %v, payload: %s", err, string(msg.Payload()))
 		return
 	}
+	settings, err := w.config()
+	if err != nil {
+		_ = w.store.SetSetting("last_mqtt_error", err.Error())
+		log.Printf("MQTT config load error: %v", err)
+		return
+	}
 	if payload.Timestamp == 0 {
 		payload.Timestamp = time.Now().Unix()
 	}
-	
-	// 添加调试日志
+
+	arrivalMs := time.Now().UnixMilli()
+	minInterval := settings.SignalMinIntervalMs
+	if minInterval <= 0 {
+		minInterval = defaultSignalMinIntervalMs
+	}
+
+	w.mu.Lock()
+	lastMs := w.lastAcceptedMs
+	if lastMs > 0 && arrivalMs-lastMs < int64(minInterval) {
+		w.filteredCount++
+		currentFiltered := w.filteredCount
+		w.mu.Unlock()
+		_ = w.store.SetSetting("last_mqtt_error", fmt.Sprintf("filtered: %dms < %dms", arrivalMs-lastMs, minInterval))
+		log.Printf("MQTT信号过滤: 间隔%dms 小于阈值%dms，累计过滤 %d 条", arrivalMs-lastMs, minInterval, currentFiltered)
+		return
+	}
+	w.lastAcceptedMs = arrivalMs
+	w.mu.Unlock()
+
 	log.Printf("MQTT received: count=%d, timestamp=%d", payload.Count, payload.Timestamp)
-	
+
 	if err := w.store.InsertEvent(payload.Timestamp, payload.Count); err != nil {
 		_ = w.store.SetSetting("last_mqtt_error", err.Error())
 		log.Printf("DB insert error: %v", err)
 		return
 	}
-	
+
 	_ = w.store.SetSetting("last_msg_ts", fmt.Sprintf("%d", payload.Timestamp))
 	_ = w.store.SetSetting("last_msg_count", fmt.Sprintf("%d", payload.Count))
 	log.Printf("MQTT data saved to database")
@@ -141,4 +170,14 @@ func brokerScheme(useTLS bool) string {
 		return "ssl"
 	}
 	return "tcp"
+}
+
+func (w *MQTTWorker) preloadLastAccepted() {
+	ts, _, err := w.store.FetchLatestEvent()
+	if err != nil {
+		return
+	}
+	if ts > 0 {
+		w.lastAcceptedMs = ts * 1000
+	}
 }

@@ -26,6 +26,7 @@ type Settings struct {
 	TGThreshold          string `json:"tg_threshold"`
 	TGNotifyTimes        int    `json:"tg_notify_times"`
 	TGNotifyIntervalHour string `json:"tg_notify_interval_hours"`
+	SignalMinIntervalMs  int    `json:"signal_min_interval_ms"`
 }
 
 type Metrics struct {

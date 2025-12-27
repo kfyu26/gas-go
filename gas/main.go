@@ -9,13 +9,19 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-var localTZ = time.FixedZone("CST", 8*3600)
+var (
+	localTZ            = time.FixedZone("CST", 8*3600)
+	debugInsertMu      sync.Mutex
+	debugLastAcceptedMs int64
+	debugFilteredCount int64
+)
 
 func main() {
 	dbPath := getenv("GAS_DB_PATH", defaultDBPath)
@@ -362,6 +368,29 @@ func main() {
 				respondError(w, http.StatusBadRequest, err)
 				return
 			}
+			settings, err := loadSettings(store)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+			minInterval := settings.SignalMinIntervalMs
+			if minInterval <= 0 {
+				minInterval = defaultSignalMinIntervalMs
+			}
+
+			nowMs := time.Now().UnixMilli()
+			debugInsertMu.Lock()
+			lastMs := debugLastAcceptedMs
+			if lastMs > 0 && nowMs-lastMs < int64(minInterval) {
+				debugFilteredCount++
+				count := debugFilteredCount
+				debugInsertMu.Unlock()
+				respondError(w, http.StatusTooManyRequests, fmt.Errorf("debug insert filtered: %dms < %dms, 累计过滤 %d 条", nowMs-lastMs, minInterval, count))
+				return
+			}
+			debugLastAcceptedMs = nowMs
+			debugInsertMu.Unlock()
+
 			if err := store.InsertEvent(payload.Timestamp, payload.Count); err != nil {
 				respondError(w, http.StatusInternalServerError, err)
 				return
@@ -404,7 +433,30 @@ func main() {
 				return
 			}
 
+			settings, err := loadSettings(store)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, err)
+				return
+			}
+			minInterval := settings.SignalMinIntervalMs
+			if minInterval <= 0 {
+				minInterval = defaultSignalMinIntervalMs
+			}
+
+			filteredBatch := 0
 			for _, event := range payload.Events {
+				nowMs := time.Now().UnixMilli()
+				debugInsertMu.Lock()
+				lastMs := debugLastAcceptedMs
+				if lastMs > 0 && nowMs-lastMs < int64(minInterval) {
+					debugFilteredCount++
+					filteredBatch++
+					debugInsertMu.Unlock()
+					continue
+				}
+				debugLastAcceptedMs = nowMs
+				debugInsertMu.Unlock()
+
 				if _, err := tx.Exec(`INSERT INTO events(ts, count, received_ts) VALUES(?, ?, ?)`,
 					event.Timestamp, event.Count, time.Now().Unix()); err != nil {
 					tx.Rollback()
@@ -422,6 +474,7 @@ func main() {
 				"status":  "success",
 				"message": "批量插入成功",
 				"count":   len(payload.Events),
+				"filtered": filteredBatch,
 			})
 		})
 
@@ -742,6 +795,13 @@ func saveSettings(store *Store, payload Settings) error {
 		return err
 	}
 	if err := store.SetSetting("tg_notify_interval_hours", payload.TGNotifyIntervalHour); err != nil {
+		return err
+	}
+	minInterval := payload.SignalMinIntervalMs
+	if minInterval <= 0 {
+		minInterval = defaultSignalMinIntervalMs
+	}
+	if err := store.SetSetting("signal_min_interval_ms", fmt.Sprintf("%d", minInterval)); err != nil {
 		return err
 	}
 
