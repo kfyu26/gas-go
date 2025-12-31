@@ -1,7 +1,9 @@
 #include <ESP8266WiFi.h>
 #include <WiFiClientSecure.h> // 新增：TLS 支持
+#include <ESP8266httpUpdate.h> // 新增：HTTP OTA 支持
 #include <PubSubClient.h>
 #include <time.h>
+#include <ArduinoOTA.h> // 新增：本地 OTA 支持
 
 // 传感器引脚配置
 #define IR_PIN 5 // 红外传感器连接的 GPIO 引脚
@@ -46,6 +48,8 @@ void connectToWiFi();
 void connectToMQTT();
 void syncTime();
 void mqttCallback(char *topic, byte *payload, unsigned int length);
+void setupOTA(); // 新增：OTA 初始化函数
+void performOTAUpdate(const char* updateUrl); // 新增：执行 OTA 升级
 
 // 中断服务函数（必须极简）
 ICACHE_RAM_ATTR void sensorISR() {
@@ -75,6 +79,7 @@ attachInterrupt(digitalPinToInterrupt(IR_PIN), sensorISR, FALLING); // 配置下
 
     connectToWiFi();
     syncTime();
+    setupOTA(); // 新增：初始化 OTA 服务
     mqtt_client.setServer(mqtt_broker, mqtt_port);
     mqtt_client.setCallback(mqttCallback);
     connectToMQTT();
@@ -87,6 +92,7 @@ if (!mqtt_client.connected()) {
 connectToMQTT();
 }
 mqtt_client.loop();
+ArduinoOTA.handle(); // 新增：处理 OTA 请求
 
     // 发送数据（仅在 MQTT 连接成功时）
     if (gasDetected && shouldSend && mqtt_client.connected()) {
@@ -191,14 +197,143 @@ Serial.print((char) payload[i]);
 Serial.println();
 
     // 处理接收到的命令
-    // 示例：如果收到 "reset" 命令，重置计数器
-    // String message = "";
-    // for (int i = 0; i < length; i++) {
-    //     message += (char)payload[i];
-    // }
-    // if (message == "reset") {
-    //     triggerCount = 0;
-    //     Serial.println("[CMD] Counter reset");
-    // }
+    String message = "";
+    for (int i = 0; i < length; i++) {
+        message += (char)payload[i];
+    }
+    
+    // 重置计数器命令
+    if (message == "reset") {
+        triggerCount = 0;
+        Serial.println("[CMD] Counter reset");
+        mqtt_client.publish(mqtt_topic, "{\"status\":\"reset_ok\"}");
+    }
+    // OTA 升级命令：格式 {"ota":"http://server/firmware.bin"}
+    else if (message.startsWith("{\"ota\":")) {
+        // 解析 JSON 获取升级 URL
+        int urlStart = message.indexOf("\"ota\":\"") + 7;
+        int urlEnd = message.indexOf("\"", urlStart);
+        if (urlStart > 6 && urlEnd > urlStart) {
+            String updateUrl = message.substring(urlStart, urlEnd);
+            Serial.printf("[OTA] Update requested: %s\n", updateUrl.c_str());
+            mqtt_client.publish(mqtt_topic, "{\"status\":\"ota_started\"}");
+            performOTAUpdate(updateUrl.c_str());
+        } else {
+            Serial.println("[OTA] Invalid OTA command format");
+            mqtt_client.publish(mqtt_topic, "{\"status\":\"ota_error\",\"error\":\"invalid_format\"}");
+        }
+        
+        // 新增：初始化本地 OTA 服务（通过 Arduino IDE 等工具）
+        void setupOTA() {
+            Serial.println("[OTA] Initializing ArduinoOTA...");
+            
+            // 设置 OTA 主机名
+            ArduinoOTA.setHostname("gas-meter-esp8266");
+            
+            // 设置 OTA 密码（可选，建议设置）
+            // ArduinoOTA.setPassword("admin123");
+            
+            // 开始事件 - 设备开始接收 OTA 升级
+            ArduinoOTA.onStart([]() {
+                Serial.println("[OTA] Start updating...");
+                // 停止中断，避免升级过程中传感器干扰
+                detachInterrupt(digitalPinToInterrupt(IR_PIN));
+            });
+            
+            // 结束事件 - 升级完成
+            ArduinoOTA.onEnd([]() {
+                Serial.println("\n[OTA] Update successful!");
+            });
+            
+            // 进度事件 - 显示升级进度
+            ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+                Serial.printf("[OTA] Progress: %u%%\r", (progress / (total / 100)));
+            });
+            
+            // 错误事件 - 升级失败
+            ArduinoOTA.onError([](ota_error_t error) {
+                Serial.printf("[OTA] Error[%u]: ", error);
+                if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+                else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+                else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+                else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+                else if (error == OTA_END_ERROR) Serial.println("End Failed");
+            });
+            
+            ArduinoOTA.begin();
+            Serial.printf("[OTA] Ready on IP %s, port %d\n", WiFi.localIP().toString().c_str(), 8266);
+        }
+        
+        // 新增：执行 HTTP OTA 升级（通过远程 URL）
+        void performOTAUpdate(const char* updateUrl) {
+            Serial.println("[OTA] Starting HTTP OTA update...");
+            Serial.printf("[OTA] URL: %s\n", updateUrl);
+            
+            // 停止中断，避免升级过程中传感器干扰
+            detachInterrupt(digitalPinToInterrupt(IR_PIN));
+            
+            // 断开 MQTT 连接，释放网络资源
+            mqtt_client.disconnect();
+            
+            // 开始 HTTP OTA 升级
+            HTTPUpdate.onStart([]() {
+                Serial.println("[OTA] HTTP update started...");
+                String msg = "{\"status\":\"ota_downloading\"}";
+                // 注意：此时 MQTT 已断开，无法发送
+            });
+            
+            HTTPUpdate.onEnd([]() {
+                Serial.println("[OTA] HTTP update finished!");
+                Serial.println("[OTA] Rebooting...");
+            });
+            
+            HTTPUpdate.onProgress([](int progress, int total) {
+                Serial.printf("[OTA] HTTP Progress: %d%%\r", (progress / (total / 100)));
+            });
+            
+            HTTPUpdate.onError([](int error) {
+                Serial.printf("[OTA] HTTP Error[%d]: ", error);
+                if (error == HTTP_UPDATE_NO_UPDATES) Serial.println("No updates available");
+                else if (error == HTTP_UPDATE_FAILED) Serial.println("Update failed");
+                else Serial.println("Unknown error");
+            });
+            
+            // 获取当前时间戳用于版本标识
+            unsigned long startTime = millis();
+            
+            // 执行升级
+            WiFiClient client;
+            t_httpUpdate_return ret = ESPhttpUpdate.update(client, updateUrl);
+            
+            // 升级后的处理（如果没有重启）
+            switch (ret) {
+                case HTTP_UPDATE_FAILED:
+                    Serial.printf("[OTA] HTTP update failed (error %d): %s\n",
+                                 ESPhttpUpdate.getLastError(),
+                                 ESPhttpUpdate.getLastErrorString().c_str());
+                    // 升级失败后重新启用中断和 MQTT
+                    attachInterrupt(digitalPinToInterrupt(IR_PIN), sensorISR, FALLING);
+                    connectToMQTT();
+                    break;
+                    
+                case HTTP_UPDATE_NO_UPDATES:
+                    Serial.println("[OTA] No updates available");
+                    attachInterrupt(digitalPinToInterrupt(IR_PIN), sensorISR, FALLING);
+                    connectToMQTT();
+                    break;
+                    
+                case HTTP_UPDATE_OK:
+                    Serial.println("[OTA] HTTP update successful!");
+                    // 升级成功后 ESP8266 会自动重启
+                    break;
+            }
+        }
+    }
+    // 查询固件版本
+    else if (message == "version") {
+        String versionMsg = "{\"version\":\"v0.0.2\",\"status\":\"ok\"}";
+        mqtt_client.publish(mqtt_topic, versionMsg.c_str());
+        Serial.println("[CMD] Version query responded");
+    }
 
 }
